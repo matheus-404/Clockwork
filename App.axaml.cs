@@ -12,6 +12,7 @@ public partial class App : Application
 {
     private OverlayController? _overlay;
     private PresentMonUpdateService? _presentMonUpdater;
+    private AppUpdateService? _appUpdater;
     private CancellationTokenSource? _startupCts;
     private MainWindow? _mainWindow;
     private IClassicDesktopStyleApplicationLifetime? _desktop;
@@ -33,6 +34,7 @@ public partial class App : Application
 
             _startupCts = new CancellationTokenSource();
             _presentMonUpdater = new PresentMonUpdateService();
+            _appUpdater = new AppUpdateService();
 
             mainWindow.Opened += (_, _) =>
             {
@@ -42,9 +44,13 @@ public partial class App : Application
             desktop.Exit += (_, _) =>
             {
                 _startupCts?.Cancel();
+
                 vm.FlushPendingSave();
+
                 _overlay?.Dispose();
                 _presentMonUpdater?.Dispose();
+                _appUpdater?.Dispose();
+
                 _startupCts?.Dispose();
                 _startupCts = null;
             };
@@ -74,10 +80,34 @@ public partial class App : Application
     {
         try
         {
+            if (_appUpdater is not null)
+            {
+                try
+                {
+                    await _appUpdater.CheckDownloadAndApplyAsync(
+                        cancellationToken);
+
+                    // If an update is found, Velopack restarts Clockwork.
+                    // Normal execution won't continue to this point.
+                }
+                catch (OperationCanceledException)
+                    when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[Clockwork] Application update check failed: {ex}");
+                }
+            }
+
             if (_presentMonUpdater is null)
                 return;
 
-            var result = await _presentMonUpdater.EnsureLatestAsync(cancellationToken);
+            var result =
+                await _presentMonUpdater.EnsureLatestAsync(
+                    cancellationToken);
 
             if (cancellationToken.IsCancellationRequested)
                 return;
