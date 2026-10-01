@@ -42,7 +42,6 @@
       <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
       <Setter Property="HorizontalContentAlignment" Value="Center" />
       <Setter Property="VerticalContentAlignment" Value="Center" />
-      <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets" />
       <Setter Property="FontSize" Value="10" />
     </Style>
     <Style Selector="Button.caption:pointerover /template/ ContentPresenter#PART_ContentPresenter">
@@ -210,7 +209,7 @@
             BorderBrush="{DynamicResource PanelBorder}" BorderThickness="0,0,0,1"
             WindowDecorationProperties.ElementRole="TitleBar">
       <Grid Background="Transparent" ColumnDefinitions="*,Auto">
-        <TextBlock Grid.Column="0" Text="Clockwork" FontSize="14"
+        <TextBlock Grid.Column="0" Text="Oi" FontSize="14"
                    Foreground="{DynamicResource TextPrimary}"
                    VerticalAlignment="Center" Margin="16,0,0,0"
                    IsHitTestVisible="False" />
