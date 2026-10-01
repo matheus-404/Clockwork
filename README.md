@@ -337,8 +337,6 @@ This includes:
 
 Settings writes are **debounced** rather than written immediately for every individual UI change. The pending state is flushed when the application exits.
 
-Keeping settings outside the installed application directory is also important for future Velopack updates because an application update can replace its installation contents.
-
 ---
 
 ## ⚡ Performance Architecture
