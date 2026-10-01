@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Extract version from tag
+        id: get_version
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Install vpk
+        run: dotnet tool install -g vpk --version 1.2.161
+
+      - name: Publish application
+        run: >
+          dotnet publish Clockwork.csproj
+          -c Release
+          -o publish
+          -r win-x64
+          --self-contained true
+
+      - name: Download previous Velopack release
+        run: >
+          vpk download github
+          --repoUrl https://github.com/${{ github.repository }}
+
+      - name: Pack with Velopack
+        run: >
+          vpk pack
+          --packId Clockwork
+          --packVersion ${{ steps.get_version.outputs.VERSION }}
+          --packDir publish
+          --mainExe Clockwork.exe
+          --packTitle Clockwork
+          --icon Assets\Icons\Clockwork.ico
+
+      - name: Publish Velopack release
+        run: >
+          vpk upload github
+          --repoUrl https://github.com/${{ github.repository }}
+          --token ${{ secrets.GITHUB_TOKEN }}
+          --publish
+          --releaseName "Clockwork ${{ steps.get_version.outputs.VERSION }}"
+          --tag ${{ github.ref_name }}
