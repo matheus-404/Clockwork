@@ -1,12 +1,6 @@
 # ⚙️ Clockwork
 
-![Platform](https://img.shields.io/badge/Platform-Windows-blue.svg)
-
-![.NET](https://img.shields.io/badge/.NET-10.0-purple.svg)
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
-
-![Release](https://img.shields.io/github/v/release/matheus-404/Clockwork?include_prereleases)
+![Platform](https://img.shields.io/badge/Platform-Windows-blue.svg) ![.NET](https://img.shields.io/badge/.NET-10.0-purple.svg) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT) ![Release](https://img.shields.io/github/v/release/matheus-404/Clockwork?include_prereleases) 
 
 **Clockwork** is a lightweight Windows system-monitoring application built with **C#**, **.NET 10**, and **Avalonia UI**. It provides an in-game telemetry overlay focused on frame-rate, frame-time, latency, CPU, GPU, RAM, and session information, while keeping the application itself simple, unobtrusive, and conscious of the additional access that hardware-monitoring tools can introduce.
 
