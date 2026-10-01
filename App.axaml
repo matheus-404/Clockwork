@@ -1,0 +1,63 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Clockwork.App"
+             RequestedThemeVariant="Dark">
+
+  <TrayIcon.Icons>
+    <TrayIcons>
+      <TrayIcon Icon="/Assets/Icons/Clockwork.ico"
+                ToolTipText="Clockwork"
+                Clicked="TrayIcon_OnClicked">
+        <TrayIcon.Menu>
+          <NativeMenu>
+            <NativeMenuItem Header="Open Clockwork" Click="ShowWindow_OnClick" />
+            <NativeMenuItemSeparator />
+            <NativeMenuItem Header="Close Clockwork" Click="ExitClockwork_OnClick" />
+          </NativeMenu>
+        </TrayIcon.Menu>
+      </TrayIcon>
+    </TrayIcons>
+  </TrayIcon.Icons>
+
+  <Application.Styles>
+    <FluentTheme />
+  </Application.Styles>
+
+  <Application.Resources>
+    <!-- Surfaces: neutral graphite with a subtle cool tint. -->
+    <SolidColorBrush x:Key="AppBackground" Color="#0F1115" />
+    <SolidColorBrush x:Key="SidebarBackground" Color="#12151A" />
+    <SolidColorBrush x:Key="PanelBorder" Color="#20252E" />
+    <SolidColorBrush x:Key="CardBackground" Color="#15191F" />
+    <SolidColorBrush x:Key="CardBorder" Color="#262C35" />
+    <SolidColorBrush x:Key="RowDivider" Color="#232932" />
+    <SolidColorBrush x:Key="NavHover" Color="#1A1F27" />
+    <SolidColorBrush x:Key="NavSelected" Color="#202734" />
+
+    <!-- Title bar buttons -->
+    <SolidColorBrush x:Key="CaptionHover" Color="#1B2028" />
+    <SolidColorBrush x:Key="CaptionPressed" Color="#252B34" />
+    <SolidColorBrush x:Key="CaptionCloseHover" Color="#C6473B" />
+    <SolidColorBrush x:Key="CaptionClosePressed" Color="#A83B32" />
+
+    <!-- Text / icons -->
+    <SolidColorBrush x:Key="TextPrimary" Color="#EEF1F6" />
+    <SolidColorBrush x:Key="TextMuted" Color="#9AA3B2" />
+    <SolidColorBrush x:Key="TextSubtle" Color="#747D8C" />
+
+    <!-- Accent + switch -->
+    <SolidColorBrush x:Key="Accent" Color="#6D8DFF" />
+    <SolidColorBrush x:Key="AccentHover" Color="#86A3FF" />
+    <SolidColorBrush x:Key="SwitchOff" Color="#303640" />
+    <SolidColorBrush x:Key="SwitchOffHover" Color="#3A424D" />
+    <SolidColorBrush x:Key="SwitchKnobOff" Color="#E3E7EE" />
+    <SolidColorBrush x:Key="SwitchKnobOn" Color="#FFFFFF" />
+
+    <!-- Secondary controls -->
+    <SolidColorBrush x:Key="ButtonBackground" Color="#1B2028" />
+    <SolidColorBrush x:Key="ButtonHover" Color="#232A34" />
+    <SolidColorBrush x:Key="ButtonPressed" Color="#2A323E" />
+    <SolidColorBrush x:Key="ButtonBorder" Color="#2A313C" />
+  </Application.Resources>
+
+</Application>

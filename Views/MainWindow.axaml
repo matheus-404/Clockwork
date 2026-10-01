@@ -1,0 +1,514 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Clockwork.ViewModels"
+        xmlns:controls="using:Clockwork.Controls"
+        xmlns:converters="using:Clockwork.Converters"
+        x:Class="Clockwork.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="Clockwork"
+        Icon="/Assets/Icons/Clockwork.ico"
+        Width="820" Height="660"
+        MinWidth="820" MinHeight="660"
+        WindowStartupLocation="CenterScreen"
+        ShowInTaskbar="True"
+        Background="{DynamicResource AppBackground}"
+        WindowDecorations="None"
+        ExtendClientAreaToDecorationsHint="True"
+        CanResize="True"
+        ExtendClientAreaTitleBarHeightHint="40"
+        FontSize="14">
+
+  <Window.Resources>
+    <converters:SvgAssetValueConverter x:Key="SvgConverter" />
+
+    <!-- Stop the Fluent theme from painting its own (system-accent) selection colors on sidebar items -->
+    <SolidColorBrush x:Key="ListBoxItemBackgroundPointerOver" Color="Transparent" />
+    <SolidColorBrush x:Key="ListBoxItemBackgroundPressed" Color="Transparent" />
+    <SolidColorBrush x:Key="ListBoxItemBackgroundSelected" Color="Transparent" />
+    <SolidColorBrush x:Key="ListBoxItemBackgroundSelectedPointerOver" Color="Transparent" />
+    <SolidColorBrush x:Key="ListBoxItemBackgroundSelectedPressed" Color="Transparent" />
+  </Window.Resources>
+
+  <Window.Styles>
+
+    <!-- ===== Title bar buttons ===== -->
+    <Style Selector="Button.caption">
+      <Setter Property="Width" Value="46" />
+      <Setter Property="Height" Value="40" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="CornerRadius" Value="0" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+      <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets" />
+      <Setter Property="FontSize" Value="10" />
+    </Style>
+    <Style Selector="Button.caption:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource CaptionHover}" />
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+    </Style>
+    <Style Selector="Button.caption:pressed /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource CaptionPressed}" />
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+    </Style>
+    <Style Selector="Button.caption.close:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource CaptionCloseHover}" />
+      <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.caption.close:pressed /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource CaptionClosePressed}" />
+      <Setter Property="Foreground" Value="White" />
+    </Style>
+
+    <!-- ===== Sidebar ===== -->
+    <Style Selector="ListBox.nav ListBoxItem">
+      <Setter Property="Height" Value="46" />
+      <Setter Property="Margin" Value="0,0,0,2" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Border Name="Root" CornerRadius="8" ClipToBounds="True">
+            <Grid>
+              <Border Name="Bar" Width="3" HorizontalAlignment="Left"
+                      Background="{DynamicResource Accent}" Opacity="0" />
+              <ContentPresenter Name="PART_ContentPresenter"
+                                Content="{TemplateBinding Content}"
+                                ContentTemplate="{TemplateBinding ContentTemplate}"
+                                Padding="18,0"
+                                VerticalContentAlignment="Center" />
+            </Grid>
+          </Border>
+        </ControlTemplate>
+      </Setter>
+    </Style>
+    <!-- Belt and braces: keep the content presenter itself always transparent -->
+    <Style Selector="ListBox.nav ListBoxItem /template/ ContentPresenter#PART_ContentPresenter, ListBox.nav ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter, ListBox.nav ListBoxItem:pressed /template/ ContentPresenter#PART_ContentPresenter, ListBox.nav ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter, ListBox.nav ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter, ListBox.nav ListBoxItem:selected:pressed /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+
+    <Style Selector="ListBox.nav ListBoxItem /template/ Border#Root">
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="ListBox.nav ListBoxItem:pointerover /template/ Border#Root">
+      <Setter Property="Background" Value="{DynamicResource NavHover}" />
+    </Style>
+    <Style Selector="ListBox.nav ListBoxItem:selected /template/ Border#Root">
+      <Setter Property="Background" Value="{DynamicResource NavSelected}" />
+    </Style>
+    <Style Selector="ListBox.nav ListBoxItem:selected /template/ Border#Bar">
+      <Setter Property="Opacity" Value="1" />
+    </Style>
+
+    <Style Selector="ListBox.nav ListBoxItem Path.icon">
+      <Setter Property="Stroke" Value="{DynamicResource TextMuted}" />
+    </Style>
+    <Style Selector="ListBox.nav ListBoxItem:selected Path.icon">
+      <Setter Property="Stroke" Value="{DynamicResource Accent}" />
+    </Style>
+    <Style Selector="ListBox.nav ListBoxItem TextBlock.navlabel">
+      <Setter Property="Foreground" Value="{DynamicResource TextMuted}" />
+    </Style>
+    <Style Selector="ListBox.nav ListBoxItem:pointerover TextBlock.navlabel">
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+    </Style>
+    <Style Selector="ListBox.nav ListBoxItem:selected TextBlock.navlabel">
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+    </Style>
+
+    <!-- ===== Option rows ===== -->
+    <Style Selector="Border.row">
+      <Setter Property="Height" Value="54" />
+      <Setter Property="Margin" Value="20,0" />
+      <Setter Property="BorderThickness" Value="0,0,0,1" />
+      <Setter Property="BorderBrush" Value="{DynamicResource RowDivider}" />
+    </Style>
+    <!-- no divider under the last row -->
+    <Style Selector="ItemsControl.rows ContentPresenter:nth-last-child(1) > Border.row">
+      <Setter Property="BorderThickness" Value="0" />
+    </Style>
+
+    <!-- ===== Switch (ToggleButton) ===== -->
+    <Style Selector="ToggleButton.switch">
+      <Setter Property="Width" Value="44" />
+      <Setter Property="Height" Value="24" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Border Name="Track" CornerRadius="12">
+            <Ellipse Name="Knob" Width="18" Height="18" HorizontalAlignment="Left">
+              <Ellipse.Transitions>
+                <Transitions>
+                  <ThicknessTransition Property="Margin" Duration="0:0:0.12" />
+                </Transitions>
+              </Ellipse.Transitions>
+            </Ellipse>
+          </Border>
+        </ControlTemplate>
+      </Setter>
+    </Style>
+    <Style Selector="ToggleButton.switch /template/ Border#Track">
+      <Setter Property="Background" Value="{DynamicResource SwitchOff}" />
+    </Style>
+    <Style Selector="ToggleButton.switch /template/ Ellipse#Knob">
+      <Setter Property="Fill" Value="{DynamicResource SwitchKnobOff}" />
+      <Setter Property="Margin" Value="3,0,0,0" />
+    </Style>
+    <Style Selector="ToggleButton.switch:pointerover /template/ Border#Track">
+      <Setter Property="Background" Value="{DynamicResource SwitchOffHover}" />
+    </Style>
+    <Style Selector="ToggleButton.switch:checked /template/ Border#Track">
+      <Setter Property="Background" Value="{DynamicResource Accent}" />
+    </Style>
+    <Style Selector="ToggleButton.switch:checked:pointerover /template/ Border#Track">
+      <Setter Property="Background" Value="{DynamicResource AccentHover}" />
+    </Style>
+    <Style Selector="ToggleButton.switch:checked /template/ Ellipse#Knob">
+      <Setter Property="Fill" Value="{DynamicResource SwitchKnobOn}" />
+      <Setter Property="Margin" Value="23,0,0,0" />
+    </Style>
+
+    <!-- ===== Overlay editor ===== -->
+    <Style Selector="Slider.overlaySlider">
+      <Setter Property="Height" Value="24" />
+    </Style>
+    <Style Selector="Slider.overlaySlider /template/ Thumb">
+      <Setter Property="Width" Value="12" />
+      <Setter Property="Height" Value="12" />
+    </Style>
+
+    <Style Selector="Button.overlayReset">
+      <Setter Property="Padding" Value="14,8" />
+      <Setter Property="CornerRadius" Value="7" />
+      <Setter Property="Background" Value="{DynamicResource ButtonBackground}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorder}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+    </Style>
+    <Style Selector="Button.overlayReset:pointerover">
+      <Setter Property="Background" Value="{DynamicResource ButtonHover}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Accent}" />
+    </Style>
+    <Style Selector="Button.overlayReset:pressed">
+      <Setter Property="Background" Value="{DynamicResource ButtonPressed}" />
+    </Style>
+
+  </Window.Styles>
+
+  <Grid>
+
+    <!-- Main client content. The window is fully client-side so every pixel of the custom
+         title bar, including its very top edge, is owned by Avalonia controls. -->
+    <Grid RowDefinitions="40,*" ColumnDefinitions="224,*">
+
+    <!-- Custom title bar: draggable area + our own caption buttons -->
+    <Border Grid.Row="0" Grid.ColumnSpan="2"
+            Background="{DynamicResource SidebarBackground}"
+            BorderBrush="{DynamicResource PanelBorder}" BorderThickness="0,0,0,1"
+            WindowDecorationProperties.ElementRole="TitleBar">
+      <Grid Background="Transparent" ColumnDefinitions="*,Auto">
+        <TextBlock Grid.Column="0" Text="Clockwork" FontSize="14"
+                   Foreground="{DynamicResource TextPrimary}"
+                   VerticalAlignment="Center" Margin="16,0,0,0"
+                   IsHitTestVisible="False" />
+
+        <StackPanel Grid.Column="1" Orientation="Horizontal">
+          <Button Name="MinimizeButton" Classes="caption"
+                  WindowDecorationProperties.ElementRole="User"
+                  Click="OnMinimizeClick"
+                  AutomationProperties.Name="Minimize">
+            <Image Source="{Binding Source='avares://Clockwork/Assets/Icons/Window Controls Icons/Minimize.svg', Converter={StaticResource SvgConverter}}" Width="10" Height="10" Stretch="Uniform" />
+          </Button>
+          <Button Name="MaximizeButton" Classes="caption"
+                  WindowDecorationProperties.ElementRole="User"
+                  Click="OnMaximizeClick"
+                  AutomationProperties.Name="Maximize">
+            <Image x:Name="MaximizeIconImage"
+                   Source="{Binding Source='avares://Clockwork/Assets/Icons/Window Controls Icons/Maximize.svg', Converter={StaticResource SvgConverter}}"
+                   Width="10" Height="10" Stretch="Uniform" />
+          </Button>
+          <Button Name="CloseButton" Classes="caption close"
+                  WindowDecorationProperties.ElementRole="User"
+                  Click="OnCloseClick"
+                  AutomationProperties.Name="Close">
+            <Image Source="{Binding Source='avares://Clockwork/Assets/Icons/Window Controls Icons/Close.svg', Converter={StaticResource SvgConverter}}" Width="10" Height="10" Stretch="Uniform" />
+          </Button>
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- Sidebar -->
+    <Border Grid.Row="1" Grid.Column="0"
+            Background="{DynamicResource SidebarBackground}"
+            BorderBrush="{DynamicResource PanelBorder}" BorderThickness="0,0,1,0">
+      <ListBox Classes="nav"
+               ItemsSource="{Binding Sections}"
+               SelectedItem="{Binding SelectedSection}"
+               Background="Transparent"
+               Padding="9,16,9,0">
+        <ListBox.ItemTemplate>
+          <DataTemplate x:DataType="vm:SectionViewModel">
+            <StackPanel Orientation="Horizontal" Spacing="14" VerticalAlignment="Center">
+              <Image Source="{Binding IconPath, Converter={StaticResource SvgConverter}}"
+                     Width="20" Height="20" Stretch="Uniform" VerticalAlignment="Center" />
+              <TextBlock Classes="navlabel" Text="{Binding Name}" VerticalAlignment="Center" />
+            </StackPanel>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+    </Border>
+
+    <!-- Content -->
+    <ScrollViewer Grid.Row="1" Grid.Column="1" VerticalScrollBarVisibility="Auto">
+      <StackPanel Margin="28,24,28,28">
+
+        <TextBlock Text="{Binding SelectedSection.Name}"
+                   FontSize="24" FontWeight="SemiBold"
+                   Foreground="{DynamicResource TextPrimary}" />
+        <TextBlock Text="{Binding SelectedSection.Description}"
+                   Margin="0,4,0,0"
+                   Foreground="{DynamicResource TextMuted}" />
+
+        <Border IsVisible="{Binding IsOptionsSectionVisible}"
+                Margin="0,24,0,0"
+                Background="{DynamicResource CardBackground}"
+                BorderBrush="{DynamicResource CardBorder}"
+                BorderThickness="1"
+                CornerRadius="12">
+          <ItemsControl Classes="rows" ItemsSource="{Binding SelectedSection.Options}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:OptionViewModel">
+                <Border Classes="row">
+                  <Grid ColumnDefinitions="Auto,*,Auto" VerticalAlignment="Center">
+                    <Image Grid.Column="0"
+                           Source="{Binding IconPath, Converter={StaticResource SvgConverter}}"
+                           Width="20" Height="20" Stretch="Uniform" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1" Text="{Binding Name}"
+                               Margin="16,0,0,0" VerticalAlignment="Center"
+                               Foreground="{DynamicResource TextPrimary}" />
+                    <ToggleButton Grid.Column="2" Classes="switch"
+                                  IsChecked="{Binding IsOn, Mode=TwoWay}"
+                                  AutomationProperties.Name="{Binding Name}" />
+                  </Grid>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </Border>
+
+        <StackPanel IsVisible="{Binding SelectedSection.IsOverlaySettings}" Margin="0,24,0,0" Spacing="16">
+          <Border Background="{DynamicResource CardBackground}"
+                  BorderBrush="{DynamicResource CardBorder}"
+                  BorderThickness="1"
+                  CornerRadius="12"
+                  Padding="18">
+            <StackPanel Spacing="12">
+              <TextBlock Text="Overlay Position"
+                         FontSize="16" FontWeight="SemiBold"
+                         Foreground="{DynamicResource TextPrimary}" />
+              <TextBlock Text="Drag the preview to place the overlay. The position is stored as a percentage of the game's client area, so it remains consistent across resolutions and windowed/fullscreen modes."
+                         Foreground="{DynamicResource TextMuted}"
+                         TextWrapping="Wrap" />
+
+              <controls:AspectRatioBorder x:Name="OverlayPreviewFrame"
+                      Margin="0,6,0,0"
+                      Background="#080B11"
+                      BorderBrush="{DynamicResource CardBorder}"
+                      BorderThickness="1"
+                      CornerRadius="0"
+                      HorizontalAlignment="Stretch"
+                      VerticalAlignment="Top"
+                      AspectRatio="1.7777777777777777"
+                      ClipToBounds="True">
+                <Canvas x:Name="OverlayPreviewCanvas"
+                        HorizontalAlignment="Stretch"
+                        VerticalAlignment="Stretch"
+                        Background="#080B11"
+                        PointerPressed="OnOverlayPreviewPointerPressed"
+                        PointerMoved="OnOverlayPreviewPointerMoved"
+                        PointerReleased="OnOverlayPreviewPointerReleased">
+                  <Border x:Name="PreviewOverlay"
+                          Width="92"
+                          Height="48"
+                          BorderBrush="#33D6FF"
+                          BorderThickness="1"
+                          CornerRadius="0"
+                          Background="#140E1218"
+                          RenderTransformOrigin="0,0"
+                          Cursor="Hand">
+                    <StackPanel Margin="5,3" Spacing="0">
+                      <TextBlock x:Name="PreviewOverlayValue" Text="60 FPS"
+                                 Foreground="#FFFFFF"
+                                 FontFamily="Consolas,Cascadia Mono,monospace"
+                                 FontSize="11" FontWeight="SemiBold" />
+                      <TextBlock x:Name="PreviewOverlayLabel" Text="32°C   5182 MHz"
+                                 Foreground="#33D6FF"
+                                 FontFamily="Consolas,Cascadia Mono,monospace"
+                                 FontSize="8" />
+                    </StackPanel>
+                  </Border>
+                </Canvas>
+              </controls:AspectRatioBorder>
+
+              <Grid ColumnDefinitions="Auto,*,Auto" VerticalAlignment="Center" Margin="0,8,0,0">
+                <TextBlock Grid.Column="0" Text="Horizontal" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" Width="86" />
+                <Slider Grid.Column="1" Classes="overlaySlider"
+                        Minimum="0" Maximum="100" TickFrequency="1"
+                        IsSnapToTickEnabled="True"
+                        Value="{Binding OverlayPositionX, Mode=TwoWay}" />
+                <TextBlock Grid.Column="2" Text="{Binding OverlayPositionX, StringFormat={}{0:0}%}"
+                           Foreground="{DynamicResource TextMuted}" Width="54" TextAlignment="Right" VerticalAlignment="Center" />
+              </Grid>
+
+              <Grid ColumnDefinitions="Auto,*,Auto" VerticalAlignment="Center">
+                <TextBlock Grid.Column="0" Text="Vertical" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" Width="86" />
+                <Slider Grid.Column="1" Classes="overlaySlider"
+                        Minimum="0" Maximum="100" TickFrequency="1"
+                        IsSnapToTickEnabled="True"
+                        Value="{Binding OverlayPositionY, Mode=TwoWay}" />
+                <TextBlock Grid.Column="2" Text="{Binding OverlayPositionY, StringFormat={}{0:0}%}"
+                           Foreground="{DynamicResource TextMuted}" Width="54" TextAlignment="Right" VerticalAlignment="Center" />
+              </Grid>
+
+              <Button Classes="overlayReset" Content="Reset position"
+                      HorizontalAlignment="Left" Click="OnResetOverlayPositionClick" />
+            </StackPanel>
+          </Border>
+
+          <Border Background="{DynamicResource CardBackground}"
+                  BorderBrush="{DynamicResource CardBorder}"
+                  BorderThickness="1"
+                  CornerRadius="12"
+                  Padding="18">
+            <StackPanel Spacing="12">
+              <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Grid.Column="0" Spacing="3">
+                  <TextBlock Text="Overlay Size"
+                             FontSize="16" FontWeight="SemiBold"
+                             Foreground="{DynamicResource TextPrimary}" />
+                  <TextBlock Text="Scale the overlay from 50% to 200%."
+                             Foreground="{DynamicResource TextMuted}" />
+                </StackPanel>
+                <TextBlock Grid.Column="1" Text="{Binding OverlayScale, StringFormat={}{0:0}%}"
+                           Foreground="{DynamicResource TextPrimary}"
+                           FontWeight="SemiBold"
+                           VerticalAlignment="Center" />
+              </Grid>
+              <Slider Classes="overlaySlider"
+                      Minimum="50" Maximum="200" TickFrequency="5"
+                      IsSnapToTickEnabled="True"
+                      Value="{Binding OverlayScale, Mode=TwoWay}" />
+
+              <Button Classes="overlayReset" Content="Reset size"
+                      HorizontalAlignment="Left" Click="OnResetOverlaySizeClick" />
+            </StackPanel>
+          </Border>
+
+          <Border Background="{DynamicResource CardBackground}"
+                  BorderBrush="{DynamicResource CardBorder}"
+                  BorderThickness="1"
+                  CornerRadius="12"
+                  Padding="18">
+            <StackPanel Spacing="12">
+              <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Grid.Column="0" Spacing="3">
+                  <TextBlock Text="Overlay Background"
+                             FontSize="16" FontWeight="SemiBold"
+                             Foreground="{DynamicResource TextPrimary}" />
+                  <TextBlock Text="Show a solid black background behind the overlay."
+                             Foreground="{DynamicResource TextMuted}" />
+                </StackPanel>
+                <ToggleButton Grid.Column="1" Classes="switch"
+                              IsChecked="{Binding OverlayBackgroundEnabled, Mode=TwoWay}"
+                              AutomationProperties.Name="Overlay Background" />
+              </Grid>
+
+              <Grid ColumnDefinitions="*,Auto" Margin="0,4,0,0">
+                <StackPanel Grid.Column="0" Spacing="3">
+                  <TextBlock Text="Background Opacity"
+                             Foreground="{DynamicResource TextPrimary}" />
+                  <TextBlock Text="Adjust from fully transparent to fully opaque."
+                             Foreground="{DynamicResource TextMuted}" />
+                </StackPanel>
+                <TextBlock Grid.Column="1"
+                           Text="{Binding OverlayBackgroundOpacity, StringFormat={}{0:0}%}"
+                           Foreground="{DynamicResource TextPrimary}"
+                           FontWeight="SemiBold"
+                           VerticalAlignment="Center" />
+              </Grid>
+
+              <Slider Classes="overlaySlider"
+                      Minimum="0" Maximum="100" TickFrequency="1"
+                      IsSnapToTickEnabled="True"
+                      IsEnabled="{Binding OverlayBackgroundEnabled}"
+                      Value="{Binding OverlayBackgroundOpacity, Mode=TwoWay}" />
+
+              <Button Classes="overlayReset" Content="Reset opacity"
+                      HorizontalAlignment="Left" Click="OnResetOverlayOpacityClick" />
+            </StackPanel>
+          </Border>
+
+          <Border Background="{DynamicResource CardBackground}"
+                  BorderBrush="{DynamicResource CardBorder}"
+                  BorderThickness="1"
+                  CornerRadius="12"
+                  Padding="18">
+            <StackPanel Spacing="12">
+              <StackPanel Spacing="3">
+                <TextBlock Text="Statistics Configuration"
+                           FontSize="16" FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextPrimary}" />
+                <TextBlock Text="Reset the enabled statistics to the default configuration with FPS only enabled."
+                           Foreground="{DynamicResource TextMuted}"
+                           TextWrapping="Wrap" />
+              </StackPanel>
+              <Button Classes="overlayReset" Content="Reset to default (FPS only)"
+                      HorizontalAlignment="Left" Click="OnResetStatisticsClick" />
+            </StackPanel>
+          </Border>
+        </StackPanel>
+
+      </StackPanel>
+    </ScrollViewer>
+
+    </Grid>
+
+    <!-- Resize hit-test strips. Because WindowDecorations=None removes the native non-client
+         frame, these Avalonia decoration roles provide resize behavior without stealing the
+         topmost pixels of the caption buttons. The top resize area intentionally stops before
+         the 3 x 46px caption-button cluster. -->
+    <Grid x:Name="ResizeTop" Height="6" VerticalAlignment="Top" HorizontalAlignment="Stretch"
+          ColumnDefinitions="*,138" ZIndex="20">
+      <Border Grid.Column="0" Background="Transparent"
+              WindowDecorationProperties.ElementRole="ResizeN" />
+    </Grid>
+
+    <Border x:Name="ResizeLeft" Width="6" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,40,0,6"
+            Background="Transparent" ZIndex="20"
+            WindowDecorationProperties.ElementRole="ResizeW" />
+    <Border x:Name="ResizeRight" Width="6" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,40,0,6"
+            Background="Transparent" ZIndex="20"
+            WindowDecorationProperties.ElementRole="ResizeE" />
+    <Border x:Name="ResizeBottom" Height="6" HorizontalAlignment="Stretch" VerticalAlignment="Bottom"
+            Background="Transparent" ZIndex="20"
+            WindowDecorationProperties.ElementRole="ResizeS" />
+
+    <Border x:Name="ResizeNW" Width="6" Height="6" HorizontalAlignment="Left" VerticalAlignment="Top"
+            Background="Transparent" ZIndex="21"
+            WindowDecorationProperties.ElementRole="ResizeNW" />
+    <Border x:Name="ResizeSW" Width="6" Height="6" HorizontalAlignment="Left" VerticalAlignment="Bottom"
+            Background="Transparent" ZIndex="21"
+            WindowDecorationProperties.ElementRole="ResizeSW" />
+    <Border x:Name="ResizeSE" Width="6" Height="6" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+            Background="Transparent" ZIndex="21"
+            WindowDecorationProperties.ElementRole="ResizeSE" />
+
+    <!-- Visual frame only. It does not participate in hit testing, so it never steals input
+         from the controls underneath it, including the caption buttons at y=0. -->
+    <Border BorderBrush="{DynamicResource PanelBorder}" BorderThickness="1"
+            IsHitTestVisible="False" ZIndex="30" />
+  </Grid>
+</Window>

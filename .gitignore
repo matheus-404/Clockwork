@@ -1,0 +1,130 @@
+# ============================================================
+# Clockwork - .gitignore
+# C# / .NET / Avalonia / Visual Studio / Velopack
+# ============================================================
+
+# ------------------------------------------------------------
+# Build output
+# ------------------------------------------------------------
+[Bb]in/
+[Oo]bj/
+artifacts/
+publish/
+Publish/
+TestResults/
+
+# Generated Velopack packages/releases
+Releases/
+
+# ------------------------------------------------------------
+# Visual Studio / VS Code
+# ------------------------------------------------------------
+.vs/
+.vscode/
+
+# User-specific Visual Studio files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.rsuser
+
+# Visual Studio performance/session files
+*.psess
+*.vsp
+*.vspx
+
+# VS Code workspace files
+*.code-workspace
+
+# ------------------------------------------------------------
+# JetBrains Rider / ReSharper
+# ------------------------------------------------------------
+.idea/
+_ReSharper*/
+*.[Rr]e[Ss]harper*
+*.DotSettings.user
+
+# ------------------------------------------------------------
+# .NET / NuGet
+# ------------------------------------------------------------
+packages/
+*.nupkg
+*.snupkg
+
+# NuGet generated files
+project.assets.json
+project.nuget.cache
+*.nuget.g.props
+*.nuget.g.targets
+
+# ------------------------------------------------------------
+# Logs / diagnostics / local dumps
+# ------------------------------------------------------------
+*.log
+*.tmp
+*.temp
+*.dmp
+
+# Local diagnostic output
+PresentMon-Diagnostics.txt
+
+# ------------------------------------------------------------
+# OS-generated files
+# ------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# ------------------------------------------------------------
+# Windows build / deployment leftovers
+# ------------------------------------------------------------
+*.msix
+*.msixbundle
+*.appx
+*.appxbundle
+
+# ------------------------------------------------------------
+# Coverage / test output
+# ------------------------------------------------------------
+coverage/
+.coverage
+.coverage.*
+*.coverage
+*.coveragexml
+
+# ------------------------------------------------------------
+# Temporary / generated directories
+# ------------------------------------------------------------
+temp/
+tmp/
+out/
+
+# ------------------------------------------------------------
+# Local environment / secrets
+# ------------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# Local signing / credential files
+*.pfx
+*.snk
+
+# ------------------------------------------------------------
+# Crash reports / profiler output
+# ------------------------------------------------------------
+crashdumps/
+dump/
+
+# ------------------------------------------------------------
+# IMPORTANT
+# ------------------------------------------------------------
+# Clockwork.ico, SVGs, XAML, C# source, .csproj/.slnx,
+# README.md, LICENSE, GitHub workflows, and other project
+# source files are intentionally NOT ignored.
