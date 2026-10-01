@@ -6,8 +6,6 @@
 
 The name **Clockwork** is inspired by *...Like Clockwork* by **Queens of the Stone Age**.
 
-> **Project status:** Release-ready core application. Velopack packaging and self-updating of Clockwork itself are planned for the release pipeline and are documented below as the next distribution step.
-
 ---
 
 ## ✨ Highlights
