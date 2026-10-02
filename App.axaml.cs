@@ -68,7 +68,7 @@ public partial class App : Application
     private void ExitClockwork_OnClick(object? sender, EventArgs e) =>
         _desktop?.Shutdown();
 
-    private void ShowMainWindow()
+    public void ShowMainWindow()
     {
         _mainWindow?.RestoreFromTray();
     }
