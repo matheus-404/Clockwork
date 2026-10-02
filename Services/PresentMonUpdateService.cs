@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
@@ -15,6 +16,8 @@ public sealed class PresentMonUpdateService : IDisposable
 {
     private const string GitHubLatestReleaseUrl =
         "https://api.github.com/repos/GameTechDev/PresentMon/releases/latest";
+
+    private const int ErrorCancelled = 1223; // user declined the UAC prompt
 
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(5);
 
@@ -258,27 +261,43 @@ public sealed class PresentMonUpdateService : IDisposable
         string msiPath,
         CancellationToken cancellationToken)
     {
+        // Clockwork itself runs as a normal user. Installing PresentMon's MSI needs
+        // administrator rights, so only this step is launched elevated (one UAC prompt).
+        // If Clockwork is already elevated, "runas" simply runs without a prompt.
         var startInfo = new ProcessStartInfo
         {
             FileName = Path.Combine(Environment.SystemDirectory, "msiexec.exe"),
-            UseShellExecute = false,
-            CreateNoWindow = true,
+            Arguments = $"/i \"{msiPath}\" /qn /norestart",
+            UseShellExecute = true,
+            Verb = "runas",
+            WindowStyle = ProcessWindowStyle.Hidden,
         };
-        startInfo.ArgumentList.Add("/i");
-        startInfo.ArgumentList.Add(msiPath);
-        startInfo.ArgumentList.Add("/qn");
-        startInfo.ArgumentList.Add("/norestart");
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Windows Installer could not be started.");
-
-        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-
-        return process.ExitCode is 0 or 3010
-            ? new MsiInstallResult(true, string.Empty)
-            : new MsiInstallResult(
+        Process? process;
+        try
+        {
+            process = Process.Start(startInfo);
+        }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == ErrorCancelled)
+        {
+            return new MsiInstallResult(
                 false,
-                $"Windows Installer exited with code {process.ExitCode}.");
+                "The PresentMon installation was cancelled at the administrator prompt.");
+        }
+
+        if (process is null)
+            throw new InvalidOperationException("Windows Installer could not be started.");
+
+        using (process)
+        {
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+
+            return process.ExitCode is 0 or 3010
+                ? new MsiInstallResult(true, string.Empty)
+                : new MsiInstallResult(
+                    false,
+                    $"Windows Installer exited with code {process.ExitCode}.");
+        }
     }
 
     private static Version? GetInstalledVersion()

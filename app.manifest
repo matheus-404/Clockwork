@@ -5,11 +5,11 @@
        For more details visit https://learn.microsoft.com/en-us/windows/win32/sbscs/application-manifests -->
 	<assemblyIdentity version="1.0.0.0" name="Clockwork.Desktop"/>
 
-	<!-- Request Administrator Privileges -->
+	<!-- Run as the current user. Only the PresentMon MSI install is elevated (see PresentMonUpdateService). -->
 	<trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
 		<security>
 			<requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
-				<requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+				<requestedExecutionLevel level="asInvoker" uiAccess="false" />
 			</requestedPrivileges>
 		</security>
 	</trustInfo>
