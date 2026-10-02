@@ -482,7 +482,7 @@
 
     <!-- Resize hit-test strips -->
     <Border x:Name="ResizeTop" Height="6" VerticalAlignment="Top" HorizontalAlignment="Stretch"
-            Margin="12,0,138,0" Background="Transparent" ZIndex="20"
+            Margin="12,0,12,0" Background="Transparent" ZIndex="20"
             WindowDecorationProperties.ElementRole="ResizeN" />
     <Border x:Name="ResizeBottom" Height="6" VerticalAlignment="Bottom" HorizontalAlignment="Stretch"
             Margin="12,0,12,0" Background="Transparent" ZIndex="20"
@@ -491,13 +491,13 @@
             Margin="0,12,0,12" Background="Transparent" ZIndex="20"
             WindowDecorationProperties.ElementRole="ResizeW" />
     <Border x:Name="ResizeRight" Width="6" HorizontalAlignment="Right" VerticalAlignment="Stretch"
-            Margin="0,6,0,12" Background="Transparent" ZIndex="20"
+            Margin="0,12,0,12" Background="Transparent" ZIndex="20"
             WindowDecorationProperties.ElementRole="ResizeE" />
 
     <Border x:Name="ResizeNW" Width="12" Height="12" HorizontalAlignment="Left" VerticalAlignment="Top"
             Background="Transparent" ZIndex="21"
             WindowDecorationProperties.ElementRole="ResizeNW" />
-    <Border x:Name="ResizeNE" Width="6" Height="6" HorizontalAlignment="Right" VerticalAlignment="Top"
+    <Border x:Name="ResizeNE" Width="12" Height="12" HorizontalAlignment="Right" VerticalAlignment="Top"
             Background="Transparent" ZIndex="21"
             WindowDecorationProperties.ElementRole="ResizeNE" />
     <Border x:Name="ResizeSW" Width="12" Height="12" HorizontalAlignment="Left" VerticalAlignment="Bottom"
