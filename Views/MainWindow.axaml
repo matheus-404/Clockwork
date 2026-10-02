@@ -34,7 +34,9 @@
     <!-- ===== Title bar buttons ===== -->
     <Style Selector="Button.caption">
       <Setter Property="Width" Value="46" />
-      <Setter Property="Height" Value="40" />
+      <Setter Property="MinHeight" Value="41" />
+      <Setter Property="VerticalAlignment" Value="Stretch" />
+      <Setter Property="Margin" Value="0,-1,0,0" />
       <Setter Property="Padding" Value="0" />
       <Setter Property="BorderThickness" Value="0" />
       <Setter Property="CornerRadius" Value="0" />
@@ -199,11 +201,10 @@
 
   <Grid>
 
-    <!-- Main client content. The window is fully client-side so every pixel of the custom
-         title bar, including its very top edge, is owned by Avalonia controls. -->
+    <!-- Main client content -->
     <Grid RowDefinitions="40,*" ColumnDefinitions="224,*">
 
-    <!-- Custom title bar: draggable area + our own caption buttons -->
+    <!-- Custom title bar: draggable area + caption buttons -->
     <Border Grid.Row="0" Grid.ColumnSpan="2"
             Background="{DynamicResource SidebarBackground}"
             BorderBrush="{DynamicResource PanelBorder}" BorderThickness="0,0,0,1"
@@ -214,7 +215,11 @@
                    VerticalAlignment="Center" Margin="16,0,0,0"
                    IsHitTestVisible="False" />
 
-        <StackPanel Grid.Column="1" Orientation="Horizontal">
+        <StackPanel Grid.Column="1" Orientation="Horizontal"
+                    VerticalAlignment="Stretch"
+                    Margin="0,-1,0,0"
+                    Background="Transparent"
+                    WindowDecorationProperties.ElementRole="User">
           <Button Name="MinimizeButton" Classes="caption"
                   WindowDecorationProperties.ElementRole="User"
                   Click="OnMinimizeClick"
@@ -475,38 +480,34 @@
 
     </Grid>
 
-    <!-- Resize hit-test strips. Because WindowDecorations=None removes the native non-client
-         frame, these Avalonia decoration roles provide resize behavior without stealing the
-         topmost pixels of the caption buttons. The top resize area intentionally stops before
-         the 3 x 46px caption-button cluster. -->
-    <Grid x:Name="ResizeTop" Height="6" VerticalAlignment="Top" HorizontalAlignment="Stretch"
-          ColumnDefinitions="*,138" ZIndex="20">
-      <Border Grid.Column="0" Background="Transparent"
-              WindowDecorationProperties.ElementRole="ResizeN" />
-    </Grid>
-
-    <Border x:Name="ResizeLeft" Width="6" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,40,0,6"
-            Background="Transparent" ZIndex="20"
-            WindowDecorationProperties.ElementRole="ResizeW" />
-    <Border x:Name="ResizeRight" Width="6" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,40,0,6"
-            Background="Transparent" ZIndex="20"
-            WindowDecorationProperties.ElementRole="ResizeE" />
-    <Border x:Name="ResizeBottom" Height="6" HorizontalAlignment="Stretch" VerticalAlignment="Bottom"
-            Background="Transparent" ZIndex="20"
+    <!-- Resize hit-test strips -->
+    <Border x:Name="ResizeTop" Height="6" VerticalAlignment="Top" HorizontalAlignment="Stretch"
+            Margin="12,0,138,0" Background="Transparent" ZIndex="20"
+            WindowDecorationProperties.ElementRole="ResizeN" />
+    <Border x:Name="ResizeBottom" Height="6" VerticalAlignment="Bottom" HorizontalAlignment="Stretch"
+            Margin="12,0,12,0" Background="Transparent" ZIndex="20"
             WindowDecorationProperties.ElementRole="ResizeS" />
+    <Border x:Name="ResizeLeft" Width="6" HorizontalAlignment="Left" VerticalAlignment="Stretch"
+            Margin="0,12,0,12" Background="Transparent" ZIndex="20"
+            WindowDecorationProperties.ElementRole="ResizeW" />
+    <Border x:Name="ResizeRight" Width="6" HorizontalAlignment="Right" VerticalAlignment="Stretch"
+            Margin="0,6,0,12" Background="Transparent" ZIndex="20"
+            WindowDecorationProperties.ElementRole="ResizeE" />
 
-    <Border x:Name="ResizeNW" Width="6" Height="6" HorizontalAlignment="Left" VerticalAlignment="Top"
+    <Border x:Name="ResizeNW" Width="12" Height="12" HorizontalAlignment="Left" VerticalAlignment="Top"
             Background="Transparent" ZIndex="21"
             WindowDecorationProperties.ElementRole="ResizeNW" />
-    <Border x:Name="ResizeSW" Width="6" Height="6" HorizontalAlignment="Left" VerticalAlignment="Bottom"
+    <Border x:Name="ResizeNE" Width="6" Height="6" HorizontalAlignment="Right" VerticalAlignment="Top"
+            Background="Transparent" ZIndex="21"
+            WindowDecorationProperties.ElementRole="ResizeNE" />
+    <Border x:Name="ResizeSW" Width="12" Height="12" HorizontalAlignment="Left" VerticalAlignment="Bottom"
             Background="Transparent" ZIndex="21"
             WindowDecorationProperties.ElementRole="ResizeSW" />
-    <Border x:Name="ResizeSE" Width="6" Height="6" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+    <Border x:Name="ResizeSE" Width="12" Height="12" HorizontalAlignment="Right" VerticalAlignment="Bottom"
             Background="Transparent" ZIndex="21"
             WindowDecorationProperties.ElementRole="ResizeSE" />
 
-    <!-- Visual frame only. It does not participate in hit testing, so it never steals input
-         from the controls underneath it, including the caption buttons at y=0. -->
+    <!-- Visual frame -->
     <Border BorderBrush="{DynamicResource PanelBorder}" BorderThickness="1"
             IsHitTestVisible="False" ZIndex="30" />
   </Grid>

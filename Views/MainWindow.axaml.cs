@@ -1,8 +1,10 @@
+using System;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
+using Avalonia.VisualTree;
 using Clockwork.Converters;
 using Clockwork.ViewModels;
 
@@ -37,7 +39,6 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
-        // Pre-load SVG assets for caption controls so maximize/restore changes stay instant.
         _maximizeIconAsset =
             (IImage)SvgAssetValueConverter.Instance.Convert(
                 "avares://Clockwork/Assets/Icons/Window Controls Icons/Maximize.svg",
@@ -110,9 +111,6 @@ public partial class MainWindow : Window
     {
         var canResize = WindowState != WindowState.Maximized;
 
-        // A maximized window has nothing useful to resize, and disabling the custom resize
-        // hit-test regions at the same time removes the resize/non-client ambiguity at the
-        // very top edge of the custom caption buttons.
         CanResize = canResize;
 
         if (ResizeTop is not null)
@@ -125,6 +123,8 @@ public partial class MainWindow : Window
             ResizeBottom.IsHitTestVisible = canResize;
         if (ResizeNW is not null)
             ResizeNW.IsHitTestVisible = canResize;
+        if (ResizeNE is not null)
+            ResizeNE.IsHitTestVisible = canResize;
         if (ResizeSW is not null)
             ResizeSW.IsHitTestVisible = canResize;
         if (ResizeSE is not null)
@@ -213,8 +213,6 @@ public partial class MainWindow : Window
         var left = Canvas.GetLeft(PreviewOverlay);
         var top = Canvas.GetTop(PreviewOverlay);
 
-        // Dragging the preview keeps the original click offset. Clicking elsewhere moves the
-        // overlay so its top-left corner lands at the pointer location.
         if (source == PreviewOverlay || source == PreviewOverlay.Child)
             _dragOffset = new Point(point.X - left, point.Y - top);
         else
@@ -309,8 +307,6 @@ public partial class MainWindow : Window
     {
         base.OnClosing(e);
 
-        // Closing the window is treated as "minimize to tray".
-        // Application/OS shutdown is allowed to close the window for real.
         if (e.CloseReason is WindowCloseReason.ApplicationShutdown or WindowCloseReason.OSShutdown)
             return;
 
