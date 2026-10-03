@@ -25,7 +25,12 @@ public sealed class AppUpdateService : IDisposable
 
     public bool IsInstalled => _updateManager.IsInstalled;
 
-    public async Task<bool> CheckDownloadAndApplyAsync(
+    /// <summary>
+    /// Checks for an update and downloads it in the background. The update is installed when
+    /// Clockwork is closed; it never restarts the app mid-session. Returns true if an update
+    /// was downloaded and scheduled.
+    /// </summary>
+    public async Task<bool> CheckDownloadAndScheduleAsync(
         CancellationToken cancellationToken = default)
     {
         if (!IsInstalled)
@@ -45,7 +50,12 @@ public sealed class AppUpdateService : IDisposable
                 update,
                 cancelToken: cancellationToken);
 
-            _updateManager.ApplyUpdatesAndRestart(update);
+            // Install silently after Clockwork exits, without relaunching it. Velopack waits for
+            // this process to end, so the overlay is never interrupted while a game is running.
+            _updateManager.WaitExitThenApplyUpdates(
+                update.TargetFullRelease,
+                silent: true,
+                restart: false);
 
             return true;
         }

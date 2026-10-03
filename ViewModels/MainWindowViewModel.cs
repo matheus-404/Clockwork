@@ -41,7 +41,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             new SectionViewModel("CPU", Icon("CPU.svg"),
                 "Select which CPU information you want to display in-game.",
             [
-                new OptionViewModel("CPU Frequency (per core)", Icon("Gauge.svg")),
+                new OptionViewModel("CPU Frequency", Icon("Gauge.svg")),
                 new OptionViewModel("CPU Usage", Icon("Pulse.svg")),
                 new OptionViewModel("CPU Busy", Icon("Clock.svg")),
                 new OptionViewModel("CPU Wait", Icon("Clock.svg")),
@@ -117,7 +117,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             foreach (var option in section.Options)
             {
-                if (loaded.OptionStates.TryGetValue(GetOptionKey(section, option), out var isOn))
+                if (loaded.OptionStates.TryGetValue(GetOptionKey(section, option), out var isOn) ||
+                    TryGetLegacyOptionState(loaded.OptionStates, section, option, out isOn))
                     option.IsOn = isOn;
             }
         }
@@ -282,6 +283,18 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     private static string GetOptionKey(SectionViewModel section, OptionViewModel option) =>
         $"{section.Name}/{option.Name}";
+
+    // Settings saved before "CPU Frequency (per core)" was renamed to "CPU Frequency".
+    private static bool TryGetLegacyOptionState(
+        IReadOnlyDictionary<string, bool> states,
+        SectionViewModel section,
+        OptionViewModel option,
+        out bool isOn)
+    {
+        isOn = false;
+        return option.Name == "CPU Frequency" &&
+               states.TryGetValue($"{section.Name}/CPU Frequency (per core)", out isOn);
+    }
 
     private static double ClampPosition(double value) =>
         double.IsFinite(value) ? Math.Clamp(value, 0.0, 100.0) : 0.0;

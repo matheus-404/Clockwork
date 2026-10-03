@@ -80,27 +80,9 @@ public partial class App : Application
     {
         try
         {
-            if (_appUpdater is not null)
-            {
-                try
-                {
-                    await _appUpdater.CheckDownloadAndApplyAsync(
-                        cancellationToken);
-
-                    // If an update is found, Velopack restarts Clockwork.
-                    // Normal execution won't continue to this point.
-                }
-                catch (OperationCanceledException)
-                    when (cancellationToken.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine(
-                        $"[Clockwork] Application update check failed: {ex}");
-                }
-            }
+            // Download any application update in the background; it installs when Clockwork is
+            // closed, so it neither delays startup nor restarts the app during a game.
+            _ = CheckForAppUpdateAsync(cancellationToken);
 
             if (_presentMonUpdater is null)
                 return;
@@ -194,6 +176,25 @@ public partial class App : Application
 
             if (!cancellationToken.IsCancellationRequested)
                 _overlay = new OverlayController(vm, mainWindow);
+        }
+    }
+
+    private async Task CheckForAppUpdateAsync(CancellationToken cancellationToken)
+    {
+        if (_appUpdater is null)
+            return;
+
+        try
+        {
+            await _appUpdater.CheckDownloadAndScheduleAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine(
+                $"[Clockwork] Application update check failed: {ex}");
         }
     }
 

@@ -24,8 +24,19 @@ public sealed class ProcessorFrequencyMonitor : IDisposable
     private bool _initialized;
     private bool _disposed;
 
+    // Each core is classified once, from its first few samples: if "Processor Frequency" stays
+    // constant it is the nominal/base clock and is scaled by "% Processor Performance"; if it
+    // moves it already reports the actual clock and is used as-is. The result is final, so a core
+    // can neither flip-flop later nor be scaled twice. Until every core is classified Sample()
+    // returns nothing (N/A) rather than a possibly wrong value; this only happens on the first
+    // sampling after launch, a few hundred milliseconds at the 100 ms telemetry rate.
+    private const int ClassificationSamples = 3;
+
     private readonly Dictionary<int, double> _lastNominal = new();
     private readonly Dictionary<int, int> _stableSamples = new();
+    private readonly Dictionary<int, int> _sampleCounts = new();
+    private readonly HashSet<int> _nominalCores = new();
+    private readonly HashSet<int> _classifiedCores = new();
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct PdhFmtCounterValueItem
@@ -77,32 +88,56 @@ public sealed class ProcessorFrequencyMonitor : IDisposable
             : performance;
 
         var result = new SortedDictionary<int, double>();
+        var classifying = false;
         foreach (var entry in frequencies)
         {
+            var key = entry.Key;
             var value = entry.Value;
-            if (performanceByCore.TryGetValue(entry.Key, out var percent) &&
+            if (performanceByCore.TryGetValue(key, out var percent) &&
                 double.IsFinite(percent) && percent > 0)
             {
-                if (_lastNominal.TryGetValue(entry.Key, out var previousNominal) &&
-                    Math.Abs(previousNominal - value) <= Math.Max(1.0, previousNominal * 0.001))
+                if (!_classifiedCores.Contains(key))
                 {
-                    _stableSamples[entry.Key] = _stableSamples.TryGetValue(entry.Key, out var stable) ? stable + 1 : 1;
-                }
-                else
-                {
-                    _stableSamples[entry.Key] = 0;
+                    var samples = _sampleCounts.TryGetValue(key, out var count) ? count + 1 : 1;
+                    _sampleCounts[key] = samples;
+
+                    if (_lastNominal.TryGetValue(key, out var previousNominal) &&
+                        Math.Abs(previousNominal - value) <= Math.Max(1.0, previousNominal * 0.001))
+                    {
+                        _stableSamples[key] = _stableSamples.TryGetValue(key, out var stable) ? stable + 1 : 1;
+                    }
+                    else
+                    {
+                        _stableSamples[key] = 0;
+                    }
+
+                    _lastNominal[key] = value;
+
+                    if (_stableSamples[key] >= ClassificationSamples - 1)
+                    {
+                        _nominalCores.Add(key);
+                        _classifiedCores.Add(key);
+                    }
+                    else if (samples >= ClassificationSamples)
+                    {
+                        _classifiedCores.Add(key); // Varies: already the actual clock.
+                    }
+                    else
+                    {
+                        classifying = true;
+                    }
                 }
 
-                _lastNominal[entry.Key] = value;
-                // Processor Frequency is the nominal/base field on modern Windows. Once stable,
-                // combine it with Processor Performance to preserve the previous CPPC-aware behavior.
-                if (_stableSamples.TryGetValue(entry.Key, out var stableSamples) && stableSamples >= 2 && value > 0)
+                if (_nominalCores.Contains(key) && value > 0)
                     value *= percent / 100.0;
             }
 
             if (double.IsFinite(value) && value > 0)
-                result[entry.Key] = value;
+                result[key] = value;
         }
+
+        if (classifying)
+            return Array.Empty<double>();
 
         return result.Values.ToArray();
     }

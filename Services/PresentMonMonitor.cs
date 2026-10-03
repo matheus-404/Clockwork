@@ -51,6 +51,14 @@ public sealed class PresentMonMonitor : IDisposable
     private readonly List<Binding> _frameBindings = new();
     private readonly Dictionary<uint, GpuSample> _gpuSamples = new();
     private readonly Dictionary<string, double> _processValues = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _polledScalarKeys = new(StringComparer.Ordinal);
+
+    // Polls that return no data (query failure or no swap chains) leave the cached values in
+    // place. If that lasts for two seconds the scalar/GPU values are dropped, so the overlay
+    // shows N/A instead of a stale number that looks live (for example while the game is
+    // minimized or loading). Time-based so it does not depend on the polling rate.
+    private static readonly long StaleAfterEmptyTicks = Stopwatch.Frequency * 2;
+    private long _emptySinceTimestamp;
     private readonly Dictionary<string, double> _frameValues = new(StringComparer.Ordinal);
 
     public bool IsAvailable => _session != 0 && _api is not null;
@@ -161,6 +169,7 @@ public sealed class PresentMonMonitor : IDisposable
             ResetFrameHistory();
             _gpuSamples.Clear();
             _processValues.Clear();
+            _emptySinceTimestamp = 0;
             _frameValues.Clear();
             ResetAverageFpsMeasurement();
         }
@@ -642,16 +651,22 @@ public sealed class PresentMonMonitor : IDisposable
         {
             if (status != PresentMonNative.PM_STATUS.OUT_OF_RANGE)
                 _lastError = $"PresentMon telemetry query failed: {PresentMonNative.StatusText(status)}";
+            MarkEmptyPoll();
             return;
         }
 
         swapChains = Math.Min(swapChains, (uint)MaxSwapChains);
         if (swapChains == 0)
+        {
+            MarkEmptyPoll();
             return;
+        }
 
         lock (_sync)
         {
+            _emptySinceTimestamp = 0;
             _gpuSamples.Clear();
+            _polledScalarKeys.Clear();
 
             // Dynamic queries are returned once per tracked swap chain. The old code only
             // inspected swap chain 0, which can be an inactive/secondary chain and made FPS
@@ -668,9 +683,14 @@ public sealed class PresentMonMonitor : IDisposable
                     switch (binding.Kind)
                     {
                         case BindingKind.ProcessScalar:
-                            if (!_processValues.TryGetValue(binding.Key, out var existing) ||
-                                !double.IsFinite(existing) ||
-                                (IsFpsKey(binding.Key) && converted > existing))
+                            // Overwrite the previous poll's value on the first valid sample of this
+                            // poll. Across multiple swap chains within the same poll, FPS metrics keep
+                            // the highest (active chain); other scalars (e.g. CPU usage) keep the first.
+                            if (_polledScalarKeys.Add(binding.Key) ||
+                                (IsFpsKey(binding.Key) &&
+                                 (!_processValues.TryGetValue(binding.Key, out var existing) ||
+                                  !double.IsFinite(existing) ||
+                                  converted > existing)))
                             {
                                 _processValues[binding.Key] = converted;
                             }
@@ -686,6 +706,22 @@ public sealed class PresentMonMonitor : IDisposable
                             break;
                     }
                 }
+            }
+        }
+    }
+
+    private void MarkEmptyPoll()
+    {
+        lock (_sync)
+        {
+            var now = Stopwatch.GetTimestamp();
+            if (_emptySinceTimestamp == 0)
+                _emptySinceTimestamp = now;
+
+            if (now - _emptySinceTimestamp >= StaleAfterEmptyTicks)
+            {
+                _processValues.Clear();
+                _gpuSamples.Clear();
             }
         }
     }

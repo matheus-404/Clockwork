@@ -39,7 +39,22 @@ public sealed class OverlayController : IDisposable
     private readonly Dictionary<string, OverlayLine> _lineByLabel = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _lastPostedValues = new(StringComparer.Ordinal);
 
-    private readonly Task _slowTask;
+    // Settings version the posted-value cache belongs to. Guarded by _lineCacheSync.
+    private int _lastPostedVersion;
+
+    // Game detection and window placement: process-table refresh, window state, show/hide.
+    private const int DetectionIntervalMs = 500;
+
+    // Telemetry (PresentMon poll, PDH, RAM and so on). FPS, latency, playtime and system time
+    // run on the separate 20 ms fast loop.
+    private const int TelemetryIntervalMs = 100;
+
+    // While the overlay is not visible nothing is displayed, so telemetry polls at the
+    // detection rate instead (frames are still consumed, so Avg FPS keeps accumulating).
+    private const int HiddenTelemetryDivisor = DetectionIntervalMs / TelemetryIntervalMs;
+
+    private readonly Task _detectionTask;
+    private readonly Task _telemetryTask;
     private readonly Task _fastTask;
 
     private EnabledStatsSnapshot _enabledStats;
@@ -48,9 +63,13 @@ public sealed class OverlayController : IDisposable
     private GameInfo? _trackedGame;
     private long _sessionStartTimestamp;
     private int _trackedRefreshMisses;
+    private bool _overlayWanted;
+    private int _hiddenTelemetryTicks;
+    private int _lastSystemTimeStamp = -1;
+    private string _lastSystemTimeText = string.Empty;
 
     // A transient process-table failure should not immediately end a running session.
-    private const int MaxTrackedRefreshMisses = 8; // 4 seconds at the 500 ms slow loop.
+    private const int MaxTrackedRefreshMisses = 8; // 4 seconds at the 500 ms detection loop.
 
     private OverlayWindow? _window;
     private GameInfo _lastUiGame;
@@ -73,7 +92,8 @@ public sealed class OverlayController : IDisposable
         }
 
         SyncLines(_enabledStats.Names);
-        _slowTask = Task.Run(SlowTelemetryLoopAsync);
+        _detectionTask = Task.Run(DetectionLoopAsync);
+        _telemetryTask = Task.Run(TelemetryLoopAsync);
         _fastTask = Task.Run(FastTelemetryLoopAsync);
     }
 
@@ -84,9 +104,12 @@ public sealed class OverlayController : IDisposable
 
         var snapshot = BuildEnabledStatsSnapshot();
         Volatile.Write(ref _enabledStats, snapshot);
-        Interlocked.Increment(ref _enabledStatsVersion);
+        var newVersion = Interlocked.Increment(ref _enabledStatsVersion);
         lock (_lineCacheSync)
+        {
             _lastPostedValues.Clear();
+            _lastPostedVersion = newVersion;
+        }
 
         PostUi(() =>
         {
@@ -118,21 +141,51 @@ public sealed class OverlayController : IDisposable
         }
     }
 
-    private async Task SlowTelemetryLoopAsync()
+    private async Task DetectionLoopAsync()
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(500));
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(DetectionIntervalMs));
 
         try
         {
             while (await timer.WaitForNextTickAsync(_cts.Token))
-                UpdateSlowTelemetry();
+            {
+                try { UpdateDetection(); }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    Debug.WriteLine($"[Clockwork] Detection tick failed: {ex}");
+                }
+            }
         }
         catch (OperationCanceledException)
         {
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[Clockwork] Slow telemetry loop stopped: {ex}");
+            Debug.WriteLine($"[Clockwork] Detection loop stopped: {ex}");
+        }
+    }
+
+    private async Task TelemetryLoopAsync()
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(TelemetryIntervalMs));
+
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_cts.Token))
+            {
+                try { UpdateTelemetry(); }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    Debug.WriteLine($"[Clockwork] Telemetry tick failed: {ex}");
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[Clockwork] Telemetry loop stopped: {ex}");
         }
     }
 
@@ -153,7 +206,11 @@ public sealed class OverlayController : IDisposable
                 if (!Volatile.Read(ref _fastLoopActive))
                     continue;
 
-                UpdateFastTelemetry();
+                try { UpdateFastTelemetry(); }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    Debug.WriteLine($"[Clockwork] Fast telemetry tick failed: {ex}");
+                }
             }
         }
         catch (OperationCanceledException)
@@ -165,14 +222,21 @@ public sealed class OverlayController : IDisposable
         }
     }
 
-    private void UpdateSlowTelemetry()
+    /// <summary>
+    /// Runs every 500 ms: finds and tracks the game, manages the session, and decides whether
+    /// the overlay is shown and where it sits. It does not read any telemetry values.
+    /// </summary>
+    private void UpdateDetection()
     {
-        var enabled = Volatile.Read(ref _enabledStats);
+        // Read the version first: the snapshot is always written before the version is bumped, so
+        // the snapshot read here is at least as new as this version.
         var version = Volatile.Read(ref _enabledStatsVersion);
+        var enabled = Volatile.Read(ref _enabledStats);
 
         if (enabled.Names.Length == 0)
         {
             EndSession();
+            Volatile.Write(ref _overlayWanted, false);
             PostUi(() =>
             {
                 HideOverlayOnly();
@@ -184,6 +248,7 @@ public sealed class OverlayController : IDisposable
         if (!TryGetTrackedGame(out var game))
         {
             EndSession();
+            Volatile.Write(ref _overlayWanted, false);
             PostUi(() =>
             {
                 HideOverlayOnly();
@@ -211,26 +276,53 @@ public sealed class OverlayController : IDisposable
             }
         }
 
-        if (enabled.MetricPlan.HasAny)
+        var showOverlay = game.IsForeground && game.IsWindowVisible && !game.IsMinimized;
+        Volatile.Write(ref _overlayWanted, showOverlay);
+        PostUi(() => ApplyDetectionUpdate(version, game, showOverlay));
+    }
+
+    /// <summary>
+    /// Runs every 100 ms: starts/updates PresentMon tracking for the current plan, reads the
+    /// telemetry snapshot and posts the changed values. FPS, latency, playtime and system time
+    /// are handled by the 20 ms fast loop instead.
+    /// </summary>
+    private void UpdateTelemetry()
+    {
+        var version = Volatile.Read(ref _enabledStatsVersion);
+        var enabled = Volatile.Read(ref _enabledStats);
+        if (enabled.Names.Length == 0)
+            return;
+
+        GameInfo game;
+        lock (_stateSync)
         {
-            lock (_presentMonSync)
-            {
-                _presentMon.StartTracking(game.Pid, enabled.MetricPlan);
-                _presentMon.Update();
-            }
+            if (_trackedGame is not { } tracked)
+                return;
+            game = tracked;
         }
-        else
-        {
-            lock (_presentMonSync)
-            {
-                if (_presentMon.IsTracking)
-                    _presentMon.StopTracking();
-            }
-        }
+
+        // Nothing is displayed while the overlay is hidden, so poll at the detection rate then.
+        if (!Volatile.Read(ref _overlayWanted) && ++_hiddenTelemetryTicks < HiddenTelemetryDivisor)
+            return;
+        _hiddenTelemetryTicks = 0;
 
         PresentMonSnapshot snapshot;
         lock (_presentMonSync)
         {
+            // The session may have ended or switched games since the game was read above.
+            if (Volatile.Read(ref _gamePid) != game.Pid)
+                return;
+
+            if (enabled.MetricPlan.HasAny)
+            {
+                _presentMon.StartTracking(game.Pid, enabled.MetricPlan);
+                _presentMon.Update();
+            }
+            else if (_presentMon.IsTracking)
+            {
+                _presentMon.StopTracking();
+            }
+
             snapshot = _presentMon.GetSnapshot(enabled.MetricPlan);
         }
 
@@ -243,30 +335,28 @@ public sealed class OverlayController : IDisposable
         var updates = new List<LineValueUpdate>(enabled.Names.Length);
         foreach (var name in enabled.Names)
         {
-            if (name == "Session Playtime")
+            if (IsFastOwned(name))
                 continue;
 
             var value = Read(name, game, snapshot);
-            if (MarkValueChanged(name, value))
+            if (MarkValueChanged(name, value, version))
                 updates.Add(new LineValueUpdate(name, value));
         }
 
-        if (enabled.PlaytimeEnabled)
-        {
-            var playtime = FormatPlaytime(GetSessionElapsed());
-            if (MarkValueChanged("Session Playtime", playtime))
-                updates.Add(new LineValueUpdate("Session Playtime", playtime));
-        }
+        if (updates.Count == 0)
+            return;
 
-        var showOverlay = game.IsForeground && game.IsWindowVisible && !game.IsMinimized;
-        var uiUpdate = new TelemetryUiUpdate(version, game, showOverlay, updates.ToArray());
-        PostUi(() => ApplyTelemetryUpdate(uiUpdate));
+        PostUi(() => ApplyLineValues(version, updates.ToArray()));
     }
+
+    private static bool IsFastOwned(string name) =>
+        name is "FPS" or "System Time" or "Session Playtime" || LatencyStats.Contains(name);
 
     private void UpdateFastTelemetry()
     {
+        var version = Volatile.Read(ref _enabledStatsVersion);
         var enabled = Volatile.Read(ref _enabledStats);
-        if (!enabled.FastPlan.HasAny && !enabled.PlaytimeEnabled)
+        if (!enabled.FastPlan.HasAny && !enabled.PlaytimeEnabled && !enabled.SystemTimeEnabled)
             return;
 
         GameInfo? game;
@@ -297,13 +387,13 @@ public sealed class OverlayController : IDisposable
             fast = new PresentMonFastFrameSnapshot(null, null, null, null, null, null, null, null, null);
         }
 
-        var updates = new List<LineValueUpdate>(9);
+        var updates = new List<LineValueUpdate>(10);
         if (enabled.FastPlan.Fps)
         {
             var fpsText = fast.Fps is { } fps && double.IsFinite(fps)
                 ? fps.ToString("0")
                 : "N/A";
-            if (MarkValueChanged("FPS", fpsText))
+            if (MarkValueChanged("FPS", fpsText, version))
                 updates.Add(new LineValueUpdate("FPS", fpsText));
         }
 
@@ -324,22 +414,35 @@ public sealed class OverlayController : IDisposable
                 "All Input-to-Photon Latency" => FormatFastLatency(fast.AllInputToPhotonLatencyMs),
                 _ => "N/A",
             };
-            if (MarkValueChanged(name, value))
+            if (MarkValueChanged(name, value, version))
                 updates.Add(new LineValueUpdate(name, value));
         }
 
         if (enabled.PlaytimeEnabled && sessionStart != 0)
         {
             var playtime = FormatPlaytime(GetSessionElapsed(sessionStart));
-            if (MarkValueChanged("Session Playtime", playtime))
+            if (MarkValueChanged("Session Playtime", playtime, version))
                 updates.Add(new LineValueUpdate("Session Playtime", playtime));
+        }
+
+        if (enabled.SystemTimeEnabled)
+        {
+            var now = DateTime.Now;
+            var stamp = now.Hour * 60 + now.Minute;
+            if (stamp != _lastSystemTimeStamp)
+            {
+                _lastSystemTimeStamp = stamp;
+                _lastSystemTimeText = now.ToString("HH:mm");
+            }
+
+            if (MarkValueChanged("System Time", _lastSystemTimeText, version))
+                updates.Add(new LineValueUpdate("System Time", _lastSystemTimeText));
         }
 
         if (updates.Count == 0)
             return;
 
-        var version = Volatile.Read(ref _enabledStatsVersion);
-        PostUi(() => ApplyFastTelemetryUpdate(version, updates.ToArray()));
+        PostUi(() => ApplyLineValues(version, updates.ToArray()));
     }
 
     private bool TryGetTrackedGame(out GameInfo game)
@@ -406,7 +509,8 @@ public sealed class OverlayController : IDisposable
             names,
             stats,
             stats.Contains("Session Playtime"),
-            stats.Contains("CPU Frequency (per core)"),
+            stats.Contains("System Time"),
+            stats.Contains("CPU Frequency"),
             BuildFastPlan(stats),
             BuildMetricPlan(stats));
     }
@@ -469,10 +573,16 @@ public sealed class OverlayController : IDisposable
         Dispatcher.UIThread.Post(action);
     }
 
-    private bool MarkValueChanged(string label, string value)
+    private bool MarkValueChanged(string label, string value, int version)
     {
         lock (_lineCacheSync)
         {
+            // A tick that began before the latest settings change would be discarded by the UI
+            // (version mismatch). It must neither post nor touch the cache, otherwise the cache
+            // claims a value was delivered to a line that was rebuilt and is still empty.
+            if (version != _lastPostedVersion)
+                return false;
+
             if (_lastPostedValues.TryGetValue(label, out var previous) &&
                 string.Equals(previous, value, StringComparison.Ordinal))
                 return false;
@@ -482,27 +592,21 @@ public sealed class OverlayController : IDisposable
         }
     }
 
-    private void ApplyTelemetryUpdate(TelemetryUiUpdate update)
+    private void ApplyDetectionUpdate(int version, GameInfo game, bool showOverlay)
     {
-        if (_disposed || update.Version != Volatile.Read(ref _enabledStatsVersion))
+        if (_disposed || version != Volatile.Read(ref _enabledStatsVersion))
             return;
 
-        _lastUiGame = update.Game;
+        _lastUiGame = game;
         _hasLastUiGame = true;
         SyncLines(Volatile.Read(ref _enabledStats).Names);
 
-        foreach (var lineUpdate in update.Values)
-        {
-            if (_lineByLabel.TryGetValue(lineUpdate.Label, out var line) && line.Value != lineUpdate.Value)
-                line.Value = lineUpdate.Value;
-        }
-
-        if (update.ShowOverlay)
+        if (showOverlay)
         {
             _window ??= new OverlayWindow { DataContext = _vm };
             if (!_window.IsVisible)
                 _window.Show();
-            ApplyOverlayPlacement(update.Game);
+            ApplyOverlayPlacement(game);
         }
         else
         {
@@ -512,10 +616,13 @@ public sealed class OverlayController : IDisposable
         UpdateFastLoopState();
     }
 
-    private void ApplyFastTelemetryUpdate(int version, IReadOnlyList<LineValueUpdate> updates)
+    private void ApplyLineValues(int version, IReadOnlyList<LineValueUpdate> updates)
     {
         if (_disposed || version != Volatile.Read(ref _enabledStatsVersion))
             return;
+
+        // Cheap when nothing changed; guarantees the lines exist before values are applied.
+        SyncLines(Volatile.Read(ref _enabledStats).Names);
 
         foreach (var item in updates)
         {
@@ -526,17 +633,54 @@ public sealed class OverlayController : IDisposable
 
     private void SyncLines(IReadOnlyList<string> names)
     {
-        if (_vm.Lines.Select(static l => l.Label).SequenceEqual(names, StringComparer.Ordinal))
-            return;
+        var lines = _vm.Lines;
 
-        _vm.Lines.Clear();
-        _lineByLabel.Clear();
-        foreach (var name in names)
+        if (lines.Count == names.Count)
         {
-            OverlayLine line = name == "CPU Frequency (per core)"
+            var same = true;
+            for (var i = 0; i < names.Count; i++)
+            {
+                if (!string.Equals(lines[i].Label, names[i], StringComparison.Ordinal))
+                {
+                    same = false;
+                    break;
+                }
+            }
+
+            if (same)
+                return;
+        }
+
+        // Update the collection in place so lines that stay keep their current values and only
+        // the lines that were actually toggled are added, removed or moved.
+        var wanted = new HashSet<string>(names, StringComparer.Ordinal);
+        for (var i = lines.Count - 1; i >= 0; i--)
+        {
+            if (!wanted.Contains(lines[i].Label))
+            {
+                _lineByLabel.Remove(lines[i].Label);
+                lines.RemoveAt(i);
+            }
+        }
+
+        for (var i = 0; i < names.Count; i++)
+        {
+            var name = names[i];
+            if (i < lines.Count && string.Equals(lines[i].Label, name, StringComparison.Ordinal))
+                continue;
+
+            if (_lineByLabel.TryGetValue(name, out var existing))
+            {
+                var from = lines.IndexOf(existing);
+                if (from >= 0 && from != i)
+                    lines.Move(from, i);
+                continue;
+            }
+
+            OverlayLine line = name == "CPU Frequency"
                 ? new PerCoreOverlayLine(name)
                 : new OverlayLine(name);
-            _vm.Lines.Add(line);
+            lines.Insert(i, line);
             _lineByLabel[name] = line;
         }
     }
@@ -590,7 +734,8 @@ public sealed class OverlayController : IDisposable
     private void UpdateFastLoopState()
     {
         var enabled = Volatile.Read(ref _enabledStats);
-        var active = _window is { IsVisible: true } && (enabled.FastPlan.HasAny || enabled.PlaytimeEnabled);
+        var active = _window is { IsVisible: true } &&
+                     (enabled.FastPlan.HasAny || enabled.PlaytimeEnabled || enabled.SystemTimeEnabled);
         Volatile.Write(ref _fastLoopActive, active);
         if (active)
             _fastWake.Set();
@@ -653,7 +798,7 @@ public sealed class OverlayController : IDisposable
             value is { } v && double.IsFinite(v) ? v.ToString(format) + unit : na;
         string Cores(IReadOnlyList<double> values, string unit) =>
             values.Count > 0
-                ? string.Join(Environment.NewLine, values.Select((v, i) => $"Core {i}: {v:0}{unit}"))
+                ? string.Join(Environment.NewLine, values.Select((v, i) => $"CPU {i}: {v:0}{unit}"))
                 : na;
         string Flag(double? value) =>
             value is { } v && double.IsFinite(v) ? (v != 0 ? "Yes" : "No") : na;
@@ -674,7 +819,7 @@ public sealed class OverlayController : IDisposable
             "Displayed FPS" => Num(snapshot.DisplayedFps, "0", ""),
             "Application FPS" => Num(snapshot.ApplicationFps, "0", ""),
 
-            "CPU Frequency (per core)" => Cores(snapshot.CpuCoreFrequenciesMHz, " MHz"),
+            "CPU Frequency" => Cores(snapshot.CpuCoreFrequenciesMHz, " MHz"),
             "CPU Usage" => Num(snapshot.CpuUsagePercent, "0", "%"),
             "CPU Busy" => Num(snapshot.CpuBusyMs, "0.0", " ms"),
             "CPU Wait" => Num(snapshot.CpuWaitMs, "0.0", " ms"),
@@ -731,7 +876,19 @@ public sealed class OverlayController : IDisposable
 
         _cts.Cancel();
         _fastWake.Set();
-        try { Task.WaitAll([_slowTask, _fastTask], TimeSpan.FromSeconds(2)); } catch { }
+
+        bool workersStopped;
+        try { workersStopped = Task.WaitAll([_detectionTask, _telemetryTask, _fastTask], TimeSpan.FromSeconds(1)); }
+        catch { workersStopped = true; } // WaitAll only throws once every task has finished.
+
+        if (!workersStopped)
+        {
+            // A worker is stuck in a PresentMon/PDH call. Do not block shutdown on it, and do not
+            // free native resources it may still be using; the OS reclaims them on process exit.
+            _window?.Close();
+            GC.SuppressFinalize(this);
+            return;
+        }
 
         EndSession();
         _window?.Close();
@@ -746,17 +903,12 @@ public sealed class OverlayController : IDisposable
 
     private readonly record struct LineValueUpdate(string Label, string Value);
 
-    private readonly record struct TelemetryUiUpdate(
-        int Version,
-        GameInfo Game,
-        bool ShowOverlay,
-        IReadOnlyList<LineValueUpdate> Values);
-
     private sealed class EnabledStatsSnapshot
     {
         public string[] Names { get; }
         public HashSet<string> Stats { get; }
         public bool PlaytimeEnabled { get; }
+        public bool SystemTimeEnabled { get; }
         public bool CpuFrequencyEnabled { get; }
         public PresentMonFastFramePlan FastPlan { get; }
         public PresentMonMetricPlan MetricPlan { get; }
@@ -765,6 +917,7 @@ public sealed class OverlayController : IDisposable
             string[] names,
             HashSet<string> stats,
             bool playtimeEnabled,
+            bool systemTimeEnabled,
             bool cpuFrequencyEnabled,
             PresentMonFastFramePlan fastPlan,
             PresentMonMetricPlan metricPlan)
@@ -772,6 +925,7 @@ public sealed class OverlayController : IDisposable
             Names = names;
             Stats = stats;
             PlaytimeEnabled = playtimeEnabled;
+            SystemTimeEnabled = systemTimeEnabled;
             CpuFrequencyEnabled = cpuFrequencyEnabled;
             FastPlan = fastPlan;
             MetricPlan = metricPlan;

@@ -60,7 +60,7 @@ Clockwork currently exposes **43 configurable statistics/options** across six me
 
 | Statistic | Description |
 |---|---|
-| **CPU Frequency (per core)** | Frequency for each logical processor, reported individually. |
+| **CPU Frequency** | Frequency for each logical processor, reported individually. |
 | **CPU Usage** | CPU utilization percentage. |
 | **CPU Busy** | CPU busy time associated with the tracked frame/telemetry data. |
 | **CPU Wait** | CPU wait time associated with the tracked frame/telemetry data. |
