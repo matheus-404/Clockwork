@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+
 namespace Clockwork.Services;
 
 /// <summary>
@@ -53,10 +54,6 @@ public sealed class PresentMonMonitor : IDisposable
     private readonly Dictionary<string, double> _processValues = new(StringComparer.Ordinal);
     private readonly HashSet<string> _polledScalarKeys = new(StringComparer.Ordinal);
 
-    // Polls that return no data (query failure or no swap chains) leave the cached values in
-    // place. If that lasts for two seconds the scalar/GPU values are dropped, so the overlay
-    // shows N/A instead of a stale number that looks live (for example while the game is
-    // minimized or loading). Time-based so it does not depend on the polling rate.
     private static readonly long StaleAfterEmptyTicks = Stopwatch.Frequency * 2;
     private long _emptySinceTimestamp;
     private readonly Dictionary<string, double> _frameValues = new(StringComparer.Ordinal);
@@ -207,10 +204,6 @@ public sealed class PresentMonMonitor : IDisposable
         }
     }
 
-    /// <summary>
-    /// Consumes newly available frame events for the fast overlay path without polling the
-    /// heavier dynamic telemetry set. The overlay uses this at 20 ms / 50 Hz.
-    /// </summary>
     public void UpdateFastFrameMetrics()
     {
         if (_trackedPid == 0 || !IsAvailable || _frameQuery == 0 || _frameBlob == 0)
@@ -226,10 +219,6 @@ public sealed class PresentMonMonitor : IDisposable
         }
     }
 
-    /// <summary>
-    /// Returns lightweight frame-derived metrics for the fast overlay path. This intentionally
-    /// excludes the heavier average and low-FPS calculations.
-    /// </summary>
     public PresentMonFastFrameSnapshot GetFastFrameSnapshot(PresentMonFastFramePlan plan)
     {
         lock (_sync)
@@ -334,8 +323,7 @@ public sealed class PresentMonMonitor : IDisposable
             return false;
         }
 
-        var version = PresentMonNative.PM_VERSION.CreateEmpty();
-        var versionStatus = api.GetApiVersion(out version);
+        var versionStatus = api.GetApiVersion(out var version);
         if (versionStatus != PresentMonNative.PM_STATUS.SUCCESS)
         {
             _lastError = $"PresentMon API version query failed: {PresentMonNative.StatusText(versionStatus)}";
@@ -381,7 +369,10 @@ public sealed class PresentMonMonitor : IDisposable
 
         try
         {
-            ReadIntrospection(rootPtr);
+            lock (_sync)
+            {
+                ReadIntrospection(rootPtr);
+            }
             BuildDynamicQuery(_metricPlan);
             BuildFrameQuery(_metricPlan);
             return _dynamicQuery != 0 || _frameQuery != 0;
@@ -479,39 +470,39 @@ public sealed class PresentMonMonitor : IDisposable
     }
 
     private bool IsMetricBound(PresentMonNative.PM_METRIC metric)
-        => _bindings.Any(x => x.Element.metric == metric) || _frameBindings.Any(x => x.Element.metric == metric);
-
-    /// <summary>
-    /// Returns a human-readable capability state when PresentMon explicitly tells us that a
-    /// metric cannot be supplied by the installed telemetry provider/device. A metric that is
-    /// AVAILABLE but has not produced a sample yet returns null so the UI can continue to show N/A.
-    /// </summary>
-    internal string? GetMetricStatusText(PresentMonNative.PM_METRIC metric)
     {
-        if (_trackedPid == 0 || !IsAvailable)
-            return null;
-
-        if (IsMetricBound(metric))
-            return null;
-
-        if (!_metrics.TryGetValue(metric, out var info))
-            return "Unsupported";
-
-        var availability = info.DeviceAvailability.Values.ToList();
-        if (availability.Any(static x => x == PresentMonNative.PM_METRIC_AVAILABILITY.AVAILABLE))
-            return null;
-
-        if (availability.Any(static x =>
-                x == PresentMonNative.PM_METRIC_AVAILABILITY.NOT_EXPORTED_BY_SOURCE ||
-                x == PresentMonNative.PM_METRIC_AVAILABILITY.NOT_SUPPORTED_BY_DEVICE ||
-                x == PresentMonNative.PM_METRIC_AVAILABILITY.NOT_IMPLEMENTED_BY_PRESENTMON))
-            return "Unsupported";
-
-        return availability.Any(static x => x == PresentMonNative.PM_METRIC_AVAILABILITY.UNAVAILABLE)
-            ? "Unavailable"
-            : "Unsupported";
+        lock (_sync)
+            return _bindings.Any(x => x.Element.metric == metric) || _frameBindings.Any(x => x.Element.metric == metric);
     }
 
+    internal string? GetMetricStatusText(PresentMonNative.PM_METRIC metric)
+    {
+        lock (_sync)
+        {
+            if (_trackedPid == 0 || !IsAvailable)
+                return null;
+
+            if (IsMetricBound(metric))
+                return null;
+
+            if (!_metrics.TryGetValue(metric, out var info))
+                return "Unsupported";
+
+            var availability = info.DeviceAvailability.Values.ToList();
+            if (availability.Any(static x => x == PresentMonNative.PM_METRIC_AVAILABILITY.AVAILABLE))
+                return null;
+
+            if (availability.Any(static x =>
+                    x == PresentMonNative.PM_METRIC_AVAILABILITY.NOT_EXPORTED_BY_SOURCE ||
+                    x == PresentMonNative.PM_METRIC_AVAILABILITY.NOT_SUPPORTED_BY_DEVICE ||
+                    x == PresentMonNative.PM_METRIC_AVAILABILITY.NOT_IMPLEMENTED_BY_PRESENTMON))
+                return "Unsupported";
+
+            return availability.Any(static x => x == PresentMonNative.PM_METRIC_AVAILABILITY.UNAVAILABLE)
+                ? "Unavailable"
+                : "Unsupported";
+        }
+    }
 
     private void BuildDynamicQuery(PresentMonMetricPlan plan)
     {
@@ -523,10 +514,6 @@ public sealed class PresentMonMonitor : IDisposable
 
         if (plan.CpuUsage)
             AddScalar(elements, PresentMonNative.PM_METRIC.CPU_UTILIZATION, _systemDeviceId, CpuUsageKey);
-        // PresentMon's CPU_FREQUENCY metric is the CPU clock-speed metric itself, not a
-        // reliable per-core array. Clockwork obtains per-logical-processor frequencies through
-        // the read-only Windows processor power-information API and uses PresentMon for the
-        // game/frame/telemetry metrics.
 
         if (plan.PresentedFps)
             AddProcessScalar(elements, PresentMonNative.PM_METRIC.PRESENTED_FPS, PresentedFpsKey);
@@ -538,10 +525,6 @@ public sealed class PresentMonMonitor : IDisposable
         if (plan.ApplicationFps)
             AddProcessScalar(elements, PresentMonNative.PM_METRIC.APPLICATION_FPS, ApplicationFpsKey);
 
-        // Hardware telemetry is device-scoped. Do not assume every GPU metric is exported
-        // on the graphics-adapter device itself: newer/alternate PresentMon telemetry
-        // providers can expose a metric on a different non-system device. Resolve each
-        // metric independently from introspection availability, preferring graphics adapters.
         if (plan.GpuTemperature) AddGpuScalar(elements, PresentMonNative.PM_METRIC.GPU_TEMPERATURE, "temp");
         if (plan.GpuCoreClock) AddGpuScalar(elements, PresentMonNative.PM_METRIC.GPU_FREQUENCY, "core-clock");
         if (plan.GpuMemoryClock) AddGpuScalar(elements, PresentMonNative.PM_METRIC.GPU_MEM_FREQUENCY, "mem-clock");
@@ -550,10 +533,6 @@ public sealed class PresentMonMonitor : IDisposable
         if (plan.GpuPower) AddGpuScalar(elements, PresentMonNative.PM_METRIC.GPU_POWER, "power");
         if (plan.GpuUsage) AddGpuScalar(elements, PresentMonNative.PM_METRIC.GPU_UTILIZATION, "usage");
 
-        // These are distinct PresentMon telemetry metrics. They must not be synthesized from
-        // generic GPU utilization/temperature/power values because doing so would change their
-        // documented meaning. When PresentMon does not export them, the UI reports Unsupported
-        // rather than pretending the metric is merely waiting for a sample.
         if (plan.GpuRenderCompute) AddGpuScalar(elements, PresentMonNative.PM_METRIC.GPU_RENDER_COMPUTE_UTILIZATION, "render-compute");
         if (plan.GpuPowerLimited) AddGpuScalar(elements, PresentMonNative.PM_METRIC.GPU_POWER_LIMITED, "power-limited");
         if (plan.GpuTemperatureLimited) AddGpuScalar(elements, PresentMonNative.PM_METRIC.GPU_TEMPERATURE_LIMITED, "temperature-limited");
@@ -573,12 +552,15 @@ public sealed class PresentMonMonitor : IDisposable
             return;
         }
 
-        _bindings.Clear();
-        for (var i = 0; i < elements.Count; i++)
+        lock (_sync)
         {
-            var binding = elements[i].Binding;
-            binding.Element = nativeElements[i];
-            _bindings.Add(binding);
+            _bindings.Clear();
+            for (var i = 0; i < elements.Count; i++)
+            {
+                var binding = elements[i].Binding;
+                binding.Element = nativeElements[i];
+                _bindings.Add(binding);
+            }
         }
 
         _dynamicBlobSize = (uint)Math.Min(uint.MaxValue, nativeElements.Max(e => e.dataOffset + e.dataSize));
@@ -624,15 +606,17 @@ public sealed class PresentMonMonitor : IDisposable
             return;
         }
 
-        _frameBindings.Clear();
-        for (var i = 0; i < elements.Count; i++)
+        lock (_sync)
         {
-            var binding = elements[i].Binding;
-            binding.Element = nativeElements[i];
-            _frameBindings.Add(binding);
+            _frameBindings.Clear();
+            for (var i = 0; i < elements.Count; i++)
+            {
+                var binding = elements[i].Binding;
+                binding.Element = nativeElements[i];
+                _frameBindings.Add(binding);
+            }
         }
 
-        // Keep a generous queue so a short UI stall does not overflow the read buffer.
         _frameBufferCapacity = Math.Max(64u, Math.Min(8192u, 4096u));
         var bytes = checked((long)Math.Max(1u, _frameBlobSize) * _frameBufferCapacity);
         _frameBlob = Marshal.AllocHGlobal(new IntPtr(bytes));
@@ -668,9 +652,6 @@ public sealed class PresentMonMonitor : IDisposable
             _gpuSamples.Clear();
             _polledScalarKeys.Clear();
 
-            // Dynamic queries are returned once per tracked swap chain. The old code only
-            // inspected swap chain 0, which can be an inactive/secondary chain and made FPS
-            // metrics appear as N/A. Scan all returned chains and retain valid values.
             for (var swapChainIndex = 0; swapChainIndex < swapChains; swapChainIndex++)
             {
                 foreach (var binding in _bindings)
@@ -683,9 +664,6 @@ public sealed class PresentMonMonitor : IDisposable
                     switch (binding.Kind)
                     {
                         case BindingKind.ProcessScalar:
-                            // Overwrite the previous poll's value on the first valid sample of this
-                            // poll. Across multiple swap chains within the same poll, FPS metrics keep
-                            // the highest (active chain); other scalars (e.g. CPU usage) keep the first.
                             if (_polledScalarKeys.Add(binding.Key) ||
                                 (IsFpsKey(binding.Key) &&
                                  (!_processValues.TryGetValue(binding.Key, out var existing) ||
@@ -809,9 +787,6 @@ public sealed class PresentMonMonitor : IDisposable
         if (info.MetricType != PresentMonNative.PM_METRIC_TYPE.DYNAMIC && info.MetricType != PresentMonNative.PM_METRIC_TYPE.DYNAMIC_FRAME)
             return;
 
-        // PresentMon's process-level dynamic metrics are queried against the independent
-        // device (device 0). Resolving this like a hardware telemetry metric can select the
-        // system device instead, yielding empty FPS/rate values even though frame data exists.
         var processDeviceId = ResolveProcessDeviceId(info);
         if (!processDeviceId.HasValue)
             return;
@@ -831,9 +806,6 @@ public sealed class PresentMonMonitor : IDisposable
         if (info.MetricType != PresentMonNative.PM_METRIC_TYPE.FRAME_EVENT && info.MetricType != PresentMonNative.PM_METRIC_TYPE.DYNAMIC_FRAME)
             return;
 
-        // Frame-event metrics are process/frame scoped in the PresentMon API. Use device 0,
-        // matching the public sample/client convention, rather than selecting a telemetry
-        // device based on availability.
         var processDeviceId = ResolveProcessDeviceId(info);
         if (!processDeviceId.HasValue)
             return;
@@ -851,17 +823,12 @@ public sealed class PresentMonMonitor : IDisposable
 
     private uint? ResolveProcessDeviceId(MetricInfo info)
     {
-        // PresentMon keeps process/frame metrics on the universal device (ID 0).
-        // Newer service builds moved CPU telemetry to the System device instead; that
-        // does not change the device used for frame/presentation metrics. Keep a fallback
-        // to the introspected independent device for older/alternate service layouts.
         if (info.DeviceArraySizes.ContainsKey(0u))
             return 0u;
         if (_hasIndependentDevice && info.DeviceArraySizes.ContainsKey(_independentDeviceId))
             return _independentDeviceId;
         return null;
     }
-
 
     private void AddScalar(List<QuerySpec> elements, PresentMonNative.PM_METRIC metric, uint deviceId, string key)
     {
@@ -892,18 +859,15 @@ public sealed class PresentMonMonitor : IDisposable
     {
         var yielded = new HashSet<uint>();
 
-        // Prefer actual graphics adapters, preserving multi-GPU support.
         foreach (var deviceId in _graphicsDeviceIds)
         {
             if (info.DeviceArraySizes.ContainsKey(deviceId) && yielded.Add(deviceId))
                 yield return deviceId;
         }
 
-        // Some telemetry providers expose a hardware metric on the independent device.
         if (_hasIndependentDevice && info.DeviceArraySizes.ContainsKey(_independentDeviceId) && yielded.Add(_independentDeviceId))
             yield return _independentDeviceId;
 
-        // Last-resort compatibility path for provider/device layouts unknown to Clockwork.
         foreach (var deviceId in info.DeviceArraySizes.Keys)
         {
             if (_deviceTypes.TryGetValue(deviceId, out var type) && type == PresentMonNative.PM_DEVICE_TYPE.SYSTEM)
@@ -998,6 +962,7 @@ public sealed class PresentMonMonitor : IDisposable
 
         return null;
     }
+
     private double? GetMetric(string key) => _frameValues.TryGetValue(key, out var value) && double.IsFinite(value) ? value : null;
 
     private GpuSample? ChooseActiveGpu()
@@ -1021,8 +986,6 @@ public sealed class PresentMonMonitor : IDisposable
         if (primary is null)
             return null;
 
-        // A metric can legally be exported on a different non-system device than the
-        // representative adapter. Prefer the same vendor, and never use SYSTEM telemetry.
         _deviceVendors.TryGetValue(primary.DeviceId, out var primaryVendor);
 
         return _gpuSamples.Values
@@ -1124,11 +1087,6 @@ public sealed class PresentMonMonitor : IDisposable
         if (_frameCount == 0 || _frameSumMs <= 0)
             return (null, null);
 
-        // Match the time-based x% low method used by MSI Afterburner/RTSS:
-        // sort frame times from worst to best, accumulate the worst frametimes until
-        // they account for x% of the total measured time, then report the FPS of the
-        // frame that reaches/exceeds that time boundary. This differs from averaging
-        // the slowest x% of frames.
         var index = (_frameHead - _frameCount + MaxFrames) % MaxFrames;
         for (var i = 0; i < _frameCount; i++)
         {
@@ -1150,9 +1108,6 @@ public sealed class PresentMonMonitor : IDisposable
         var targetTimeMs = _frameSumMs * fraction;
         var accumulatedTimeMs = 0.0;
 
-        // _lowFpsScratch is ascending, so walk backwards from the longest frame
-        // times. The frame which first reaches/exceeds the target time is the
-        // time-based x% low boundary.
         for (var i = _frameCount - 1; i >= 0; i--)
         {
             accumulatedTimeMs += _lowFpsScratch[i];
@@ -1197,11 +1152,15 @@ public sealed class PresentMonMonitor : IDisposable
         _frameQuery = 0;
         _dynamicBlobSize = 0;
         _frameBlobSize = 0;
-        _bindings.Clear();
-        _frameBindings.Clear();
-        _processValues.Clear();
-        _frameValues.Clear();
-        _gpuSamples.Clear();
+
+        lock (_sync)
+        {
+            _bindings.Clear();
+            _frameBindings.Clear();
+            _processValues.Clear();
+            _frameValues.Clear();
+            _gpuSamples.Clear();
+        }
 
         FreeBuffer(ref _dynamicBlob);
         FreeBuffer(ref _frameBlob);

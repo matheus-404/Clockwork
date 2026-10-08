@@ -20,6 +20,11 @@ internal static class IgnoredApplications
         "lusrmgr", "gpedit", "secpol", "wf", "wusa", "sethc", "utilman", "spoolsv", "PrintIsolationHost",
         "DisplaySwitch", "dccw", "ctfmon", "fontview", "ComputerDefaults", "CredUIHost",
         "UserOOBEBroker", "oobe", "msdt", "HelpPane", "FirstLogonAnim", "WinStore.App", "WinStore.App.exe",
+
+        // AI / Desktop Assistants / LLM wrappers
+        "Gemini", "ChatGPT", "Claude", "Copilot", "Perplexity", "DeepSeek", "Poe", "LM Studio",
+        "Jan", "Ollama", "Chatbox", "TypingMind", "msty", "AnythingLLM", "LocalAI",
+
         // File managers / archive tools / viewers
         "7zFM", "WinRAR", "UnRAR", "peazip", "Bandizip", "Everything", "EverythingToolbar",
         "Q-Dir", "DirectoryOpus", "xyplorer", "freecommander", "totalcmd", "tc", "Files",
@@ -27,6 +32,7 @@ internal static class IgnoredApplications
         "irfanview", "i_view32", "xnview", "xnviewmp", "nomacs", "ImageGlass", "Honeyview",
         "FastStoneImageViewer", "ACDSee", "qimgv", "JPEGView", "Imagine", "gwenview",
         "sumatrapdf", "AcroRd32", "Acrobat", "FoxitReader", "FoxitPDFReader", "PDFXEdit",
+
         // Web browsers / browser shells
         "chrome", "chrome_proxy", "GoogleCrashHandler", "firefox", "firefoxdeveloperedition", "librewolf",
         "waterfox", "waterfoxclassic", "brave", "brave_crash_handler", "msedge", "msedgewebview2",
@@ -34,6 +40,7 @@ internal static class IgnoredApplications
         "yandexbrowser", "palemoon", "floorp", "thorium", "ungoogled-chromium", "chromium",
         "arc", "zen", "sidekick", "maxthon", "avastbrowser", "epicwebbrowser", "comodo_dragon",
         "iridium", "centbrowser", "srware_iron", "duckduckgo", "startpageshell",
+
         // Messaging / collaboration / social apps
         "Discord", "DiscordPTB", "DiscordCanary", "slack", "Teams", "ms-teams", "MSTeams",
         "Skype", "SkypeApp", "Zoom", "Webex", "CiscoCollabHost", "WhatsApp", "WhatsAppBeta",
@@ -41,6 +48,7 @@ internal static class IgnoredApplications
         "WeChat", "WeChatApp", "ICQ", "thunderbird", "Mailbird", "eMClient", "Outlook",
         "Mattermost", "Rocket.Chat", "Ferdium", "Rambox", "Franz", "Station", "Wavebox",
         "FacebookMessenger", "Instagram", "Messenger", "Reddit", "X", "Twitter", "Threads",
+
         // Media players / music / streaming clients
         "vlc", "vlc-cache-gen", "mpv", "mpvnet", "mpc-hc", "mpc-hc64", "mpc-be", "mpc-be64",
         "PotPlayerMini", "PotPlayerMini64", "kodi", "KodiSetup", "SMPlayer",
@@ -48,6 +56,7 @@ internal static class IgnoredApplications
         "Spotify", "SpotifyWebHelper", "TIDAL", "Deezer", "Pandora", "AmazonMusic", "AppleMusic",
         "YouTubeMusic", "MediaMonkey", "JRiver", "plex", "Plexamp", "Jellyfin", "Emby",
         "Netflix", "PrimeVideo", "DisneyPlus", "Max", "Hulu", "Peacock", "ParamountPlus",
+
         // Game launchers / storefronts / publisher clients (not games themselves)
         "steam", "steamwebhelper", "SteamService", "EpicGamesLauncher", "EpicWebHelper",
         "Battle.net", "Agent", "BlizzardUpdateAgent", "UbisoftConnect", "upc", "Uplay",
@@ -60,12 +69,14 @@ internal static class IgnoredApplications
         "itch", "itchio", "NVIDIA Share", "GeForceExperience", "NVIDIA App",
         "NVContainer", "NVCPLUI", "nvsphelper64", "RadeonSoftware", "AMDRSServ",
         "amdow", "IGCC", "IntelGraphicsSoftware", "IntelGraphicsCommandCenter",
+
         // Recording / streaming / production tools
         "obs64", "obs32", "Streamlabs", "slobs", "XSplit", "XSplitBroadcaster", "XSplitCore",
         "LightstreamStudio", "vMix", "Wirecast", "PRISMLiveStudio", "NVIDIA Broadcast", "NVBroadcastContainer",
         "ShareX", "Greenshot", "SnippingTool", "ScreenClippingHost", "Snipaste", "Flameshot",
         "Bandicam", "bdcam", "Fraps", "GameRecorder", "Action", "MirillisAction", "Dxtory",
         "ReLive", "RadeonSoftwareSlimmer", "InstantReplay",
+
         // Office / productivity / document applications
         "WINWORD", "EXCEL", "POWERPNT", "ONENOTE", "ONENOTEM", "MSPUB", "MSACCESS", "VISIO",
         "WINPROJ", "soffice", "soffice.bin", "swriter", "scalc", "simpress", "sdraw", "sbase",
@@ -74,6 +85,7 @@ internal static class IgnoredApplications
         "Notion", "Evernote", "Obsidian", "Logseq", "Joplin", "StandardNotes",
         "Todoist", "ticktick", "Trello", "Asana", "ClickUp", "Monday", "Linear",
         "FoxitPDFEditor", "drawboard", "Kindle", "Calibre", "Zotero", "Mendeley",
+
         // Developer tools / terminals / IDEs
         "devenv", "VSLauncher", "ServiceHub.Host.netfx.x64", "ServiceHub.RoslynCodeAnalysisService",
         "code", "Code - Insiders", "cursor", "Windsurf", "sublime_text",
@@ -89,6 +101,7 @@ internal static class IgnoredApplications
         "ubuntu2404", "debian", "kali", "wsl", "wslhost", "wslservice", "docker", "Docker Desktop",
         "com.docker.backend", "com.docker.proxy", "podman", "Podman Desktop", "rancher-desktop",
         "kubernetes-dashboard", "minikube", "kind", "vagrant", "vagrant-vmware-utility",
+
         // Remote desktop / remote access / VM clients
         "mstsc", "msrdc", "RemoteDesktop", "TeamViewer", "tv_w32", "tv_x64", "AnyDesk",
         "AnyDeskMSI", "RustDesk", "parsec", "ParsecService", "Moonlight",
@@ -97,6 +110,7 @@ internal static class IgnoredApplications
         "VBoxHeadless", "vmware", "vmware-vmx", "vmware-remotemks", "vmware-authd", "vmware-usbarbitrator",
         "vmplayer", "vmwaretray", "qemu-system-x86_64", "qemu-system-aarch64", "Hyper-V",
         "vmconnect", "VirtualMachineConnection", "Parallels Client", "Parallels",
+
         // Hardware monitoring / tuning utilities (Clockwork overlay is not useful over these)
         "HWiNFO64", "HWiNFO32", "HWiNFO", "HWMonitor", "OpenHardwareMonitor", "LibreHardwareMonitor",
         "FanControl", "FanControlService", "RTSS", "RTSSHooksLoader64", "RivaTunerStatisticsServer",
@@ -106,16 +120,19 @@ internal static class IgnoredApplications
         "ArmouryCrate.UserSessionHelper", "Aac3572MbHal", "GHelper", "LenovoVantage", "DragonCenter",
         "MSI Center", "MSI.CentralServer", "GigabyteControlCenter", "GCCService", "ASUS",
         "AlienwareCommandCenter", "OMEN Gaming Hub", "OMENCommandCenter", "AcerSense", "PredatorSense",
+
         // Cloud storage / sync clients
         "OneDrive", "Dropbox", "GoogleDriveFS", "drivefs", "iCloudDrive", "iCloudDriveFS",
         "Box", "BoxDrive", "MegaClient", "MEGAsync", "pCloud", "Sync", "SyncTrayzor", "Syncthing",
         "Nextcloud", "ownCloud", "AmazonDrive", "Tresorit",
+
         // Creative / design / audio production applications
         "Photoshop", "PhotoshopElements", "Illustrator", "InDesign", "AfterFX", "Premiere Pro",
         "Premiere", "MediaEncoder", "Animate", "Audition", "Lightroom", "LightroomClassic",
         "AcrobatDistiller", "CorelDRW", "CorelDRAW", "PaintToolSAI", "SAI", "krita", "GIMP",
         "Inkscape", "Affinity", "AffinityPhoto", "AffinityDesigner", "AffinityPublisher", "DaVinciResolve",
         "Resolve", "Ableton Live", "AbletonLive", "FLStudio", "FL Studio", "Studio One", "REAPER", "Cakewalk", "Cubase", "ProTools", "nuendo", "reason", "BitwigStudio", "LMMS",
+
         // Security / endpoint / admin applications
         "msmpeng", "SecurityHealthSystray", "SecurityHealthService", "WindowsDefender",
         "ESET", "egui", "avgui", "avastui", "Kaspersky", "KasperskyUI", "mbam",
@@ -123,11 +140,13 @@ internal static class IgnoredApplications
         "BitdefenderAgent", "McUICnt", "McAfee", "TrendMicro", "Webroot", "CrowdStrike",
         "CSFalconService", "ProcessHacker", "procexp", "procexp64", "procmon",
         "autoruns", "Autoruns64", "tcpview", "rammap", "vmmap", "diskmon", "filemon", "regmon",
+
         // Update / installer / maintenance shells
         "wuauclt", "UsoClient", "MoUsoCoreWorker", "TiWorker", "TrustedInstaller", "WindowsUpdateBox",
         "setup", "setuphost", "install", "installer", "unins000", "updater", "update",
         "AdobeARMservice", "GoogleUpdater", "GoogleUpdate", "MicrosoftEdgeUpdate", "OneDriveSetup",
         "DropboxUpdate", "SpotifyUpdate", "SteamUpdate", "EpicGamesLauncherUpdate",
+
         // OCR / screen / accessibility / utility front ends
         "PowerToys", "PowerToysSettings", "PowerToysRun", "FancyZones", "FlowLauncher", "Wox",
         "Everything64", "Everything32", "Listary", "Ditto", "AutoHotkey", "AutoHotkeyU64",

@@ -38,8 +38,6 @@ internal static class PresentMonNative
         FEATURE_DISABLED,
     }
 
-    // Values must match PresentMon's public PM_METRIC enum. Explicit numeric values preserve
-    // the ABI IDs across PresentMon API v3 minor releases.
     internal enum PM_METRIC
     {
         CPU_FRAME_TIME = 8,
@@ -375,39 +373,6 @@ internal static class PresentMonNative
             return false;
         }
 
-        private static IEnumerable<string> GetCandidatePaths()
-        {
-            var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            // A local copy is useful for development/testing, but a public Clockwork
-            // installation should use the API DLL installed with PresentMon Service.
-            Add(paths, Path.Combine(AppContext.BaseDirectory, "PresentMonAPI2.dll"));
-
-            var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-            var programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
-
-            foreach (var root in new[] { programFiles, programFilesX86 })
-            {
-                if (string.IsNullOrWhiteSpace(root))
-                    continue;
-
-                // PresentMon Service installs PresentMonAPI2.dll beside PresentMonService.exe.
-                Add(paths, Path.Combine(root, "Intel", "PresentMonSharedService", "PresentMonAPI2.dll"));
-
-                // Keep the older/alternate layouts as compatibility fallbacks.
-                Add(paths, Path.Combine(root, "Intel", "PresentMon", "PresentMonAPI2.dll"));
-                Add(paths, Path.Combine(root, "Intel", "PresentMon", "SDK", "PresentMonAPI2.dll"));
-            }
-
-            return paths;
-        }
-
-        private static void Add(HashSet<string> paths, string path)
-        {
-            if (!string.IsNullOrWhiteSpace(path))
-                paths.Add(path);
-        }
-
         private T Load<T>(string exportName) where T : Delegate
         {
             if (_module == 0 || _disposed)
@@ -430,6 +395,34 @@ internal static class PresentMonNative
             }
             GC.SuppressFinalize(this);
         }
+    }
+
+    internal static IEnumerable<string> GetCandidatePaths()
+    {
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        Add(paths, Path.Combine(AppContext.BaseDirectory, "PresentMonAPI2.dll"));
+
+        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        var programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+
+        foreach (var root in new[] { programFiles, programFilesX86 })
+        {
+            if (string.IsNullOrWhiteSpace(root))
+                continue;
+
+            Add(paths, Path.Combine(root, "Intel", "PresentMonSharedService", "PresentMonAPI2.dll"));
+            Add(paths, Path.Combine(root, "Intel", "PresentMon", "PresentMonAPI2.dll"));
+            Add(paths, Path.Combine(root, "Intel", "PresentMon", "SDK", "PresentMonAPI2.dll"));
+        }
+
+        return paths;
+    }
+
+    private static void Add(HashSet<string> paths, string path)
+    {
+        if (!string.IsNullOrWhiteSpace(path))
+            paths.Add(path);
     }
 
     internal static string StatusText(PM_STATUS status) => status.ToString();

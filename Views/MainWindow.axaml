@@ -7,8 +7,8 @@
         x:DataType="vm:MainWindowViewModel"
         Title="Clockwork"
         Icon="/Assets/Icons/Clockwork.ico"
-        Width="820" Height="660"
-        MinWidth="820" MinHeight="660"
+        Width="900" Height="660"
+        MinWidth="900" MinHeight="660"
         WindowStartupLocation="CenterScreen"
         ShowInTaskbar="True"
         Background="{DynamicResource AppBackground}"
@@ -21,7 +21,6 @@
   <Window.Resources>
     <converters:SvgAssetValueConverter x:Key="SvgConverter" />
 
-    <!-- Stop the Fluent theme from painting its own (system-accent) selection colors on sidebar items -->
     <SolidColorBrush x:Key="ListBoxItemBackgroundPointerOver" Color="Transparent" />
     <SolidColorBrush x:Key="ListBoxItemBackgroundPressed" Color="Transparent" />
     <SolidColorBrush x:Key="ListBoxItemBackgroundSelected" Color="Transparent" />
@@ -31,7 +30,6 @@
 
   <Window.Styles>
 
-    <!-- ===== Title bar buttons ===== -->
     <Style Selector="Button.caption">
       <Setter Property="Width" Value="46" />
       <Setter Property="MinHeight" Value="41" />
@@ -63,7 +61,6 @@
       <Setter Property="Foreground" Value="White" />
     </Style>
 
-    <!-- ===== Sidebar ===== -->
     <Style Selector="ListBox.nav ListBoxItem">
       <Setter Property="Height" Value="46" />
       <Setter Property="Margin" Value="0,0,0,2" />
@@ -84,7 +81,6 @@
         </ControlTemplate>
       </Setter>
     </Style>
-    <!-- Belt and braces: keep the content presenter itself always transparent -->
     <Style Selector="ListBox.nav ListBoxItem /template/ ContentPresenter#PART_ContentPresenter, ListBox.nav ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter, ListBox.nav ListBoxItem:pressed /template/ ContentPresenter#PART_ContentPresenter, ListBox.nav ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter, ListBox.nav ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter, ListBox.nav ListBoxItem:selected:pressed /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="Transparent" />
     </Style>
@@ -118,19 +114,16 @@
       <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
     </Style>
 
-    <!-- ===== Option rows ===== -->
     <Style Selector="Border.row">
       <Setter Property="Height" Value="54" />
       <Setter Property="Margin" Value="20,0" />
       <Setter Property="BorderThickness" Value="0,0,0,1" />
       <Setter Property="BorderBrush" Value="{DynamicResource RowDivider}" />
     </Style>
-    <!-- no divider under the last row -->
     <Style Selector="ItemsControl.rows ContentPresenter:nth-last-child(1) > Border.row">
       <Setter Property="BorderThickness" Value="0" />
     </Style>
 
-    <!-- ===== Switch (ToggleButton) ===== -->
     <Style Selector="ToggleButton.switch">
       <Setter Property="Width" Value="44" />
       <Setter Property="Height" Value="24" />
@@ -172,7 +165,6 @@
       <Setter Property="Margin" Value="23,0,0,0" />
     </Style>
 
-    <!-- ===== Overlay editor ===== -->
     <Style Selector="Slider.overlaySlider">
       <Setter Property="Height" Value="24" />
     </Style>
@@ -201,10 +193,8 @@
 
   <Grid>
 
-    <!-- Main client content -->
     <Grid RowDefinitions="40,*" ColumnDefinitions="224,*">
 
-    <!-- Custom title bar: draggable area + caption buttons -->
     <Border Grid.Row="0" Grid.ColumnSpan="2"
             Background="{DynamicResource SidebarBackground}"
             BorderBrush="{DynamicResource PanelBorder}" BorderThickness="0,0,0,1"
@@ -244,7 +234,6 @@
       </Grid>
     </Border>
 
-    <!-- Sidebar -->
     <Border Grid.Row="1" Grid.Column="0"
             Background="{DynamicResource SidebarBackground}"
             BorderBrush="{DynamicResource PanelBorder}" BorderThickness="0,0,1,0">
@@ -265,7 +254,6 @@
       </ListBox>
     </Border>
 
-    <!-- Content -->
     <ScrollViewer Grid.Row="1" Grid.Column="1" VerticalScrollBarVisibility="Auto">
       <StackPanel Margin="28,24,28,28">
 
@@ -455,6 +443,29 @@
             </StackPanel>
           </Border>
 
+          <!-- Windowed Mode Gate -->
+          <Border Background="{DynamicResource CardBackground}"
+                  BorderBrush="{DynamicResource CardBorder}"
+                  BorderThickness="1"
+                  CornerRadius="12"
+                  Padding="18">
+            <StackPanel Spacing="12">
+              <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Grid.Column="0" Spacing="3">
+                  <TextBlock Text="Include Windowed Games"
+                             FontSize="16" FontWeight="SemiBold"
+                             Foreground="{DynamicResource TextPrimary}" />
+                  <TextBlock Text="By default, Clockwork only activates over Fullscreen and Borderless games to avoid capturing desktop apps. Enable this if you play games in a floating window."
+                             Foreground="{DynamicResource TextMuted}"
+                             TextWrapping="Wrap" />
+                </StackPanel>
+                <ToggleButton Grid.Column="1" Classes="switch"
+                              IsChecked="{Binding IncludeWindowedGames, Mode=TwoWay}"
+                              AutomationProperties.Name="Include Windowed Games" />
+              </Grid>
+            </StackPanel>
+          </Border>
+
           <Border Background="{DynamicResource CardBackground}"
                   BorderBrush="{DynamicResource CardBorder}"
                   BorderThickness="1"
@@ -480,7 +491,6 @@
 
     </Grid>
 
-    <!-- Resize hit-test strips -->
     <Border x:Name="ResizeTop" Height="6" VerticalAlignment="Top" HorizontalAlignment="Stretch"
             Margin="12,0,12,0" Background="Transparent" ZIndex="20"
             WindowDecorationProperties.ElementRole="ResizeN" />
@@ -507,7 +517,6 @@
             Background="Transparent" ZIndex="21"
             WindowDecorationProperties.ElementRole="ResizeSE" />
 
-    <!-- Visual frame -->
     <Border BorderBrush="{DynamicResource PanelBorder}" BorderThickness="1"
             IsHitTestVisible="False" ZIndex="30" />
   </Grid>

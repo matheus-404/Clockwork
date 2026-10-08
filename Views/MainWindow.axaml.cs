@@ -1,4 +1,3 @@
-using System;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -203,7 +202,7 @@ public partial class MainWindow : Window
 
     private void OnOverlayPreviewPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (ViewModel is not { } vm || e.Source is not Control source || OverlayPreviewCanvas is null)
+        if (ViewModel is not { } vm || e.Source is not Visual sourceVisual || OverlayPreviewCanvas is null || PreviewOverlay is null)
             return;
 
         var point = e.GetPosition(OverlayPreviewCanvas);
@@ -213,10 +212,10 @@ public partial class MainWindow : Window
         var left = Canvas.GetLeft(PreviewOverlay);
         var top = Canvas.GetTop(PreviewOverlay);
 
-        if (source == PreviewOverlay || source == PreviewOverlay.Child)
+        if (sourceVisual == PreviewOverlay || PreviewOverlay.IsVisualAncestorOf(sourceVisual))
             _dragOffset = new Point(point.X - left, point.Y - top);
         else
-            _dragOffset = new Point(0, 0);
+            _dragOffset = new Point(previewWidth / 2.0, previewHeight / 2.0);
 
         _draggingOverlay = true;
         OverlayPreviewCanvas.PointerCaptureLost += OnOverlayPreviewPointerCaptureLost;
@@ -227,7 +226,7 @@ public partial class MainWindow : Window
 
     private void OnOverlayPreviewPointerMoved(object? sender, PointerEventArgs e)
     {
-        if (!_draggingOverlay || ViewModel is not { } vm || OverlayPreviewCanvas is null)
+        if (!_draggingOverlay || ViewModel is not { } vm || OverlayPreviewCanvas is null || PreviewOverlay is null)
             return;
 
         var point = e.GetPosition(OverlayPreviewCanvas);

@@ -103,22 +103,28 @@ internal static class Win32
     private const int StatusInfoLengthMismatch = unchecked((int)0xC0000004);
     private const int StatusBufferTooSmall = unchecked((int)0xC0000023);
 
-    // x64 layout documented for SYSTEM_PROCESS_INFORMATION.
     private const int CreateTimeOffset = 32;
     private const int ProcessNameOffset = 56;
     private const int ProcessIdOffset = 80;
     private const int WorkingSetOffset = 144;
+    private const int MinEntryRequiredSize = WorkingSetOffset + sizeof(long);
 
-    public static bool TryGetForegroundFullscreenCandidate(out nint hwnd, out int pid, out RECT monitor)
+    public static bool TryGetForegroundCandidate(
+        bool includeWindowedGames,
+        out nint hwnd,
+        out int pid,
+        out RECT monitor,
+        out bool isFullscreen)
     {
         hwnd = 0;
         pid = 0;
         monitor = default;
+        isFullscreen = false;
 
         try
         {
             hwnd = GetForegroundWindow();
-            if (hwnd == 0)
+            if (hwnd == 0 || !IsWindow(hwnd) || !IsWindowVisible(hwnd) || IsIconic(hwnd))
                 return false;
 
             GetWindowThreadProcessId(hwnd, out var rawPid);
@@ -135,13 +141,25 @@ internal static class Win32
                 return false;
 
             monitor = mi.rcMonitor;
-            return CoversMonitor(windowRect, monitor);
+            isFullscreen = CoversMonitor(windowRect, monitor);
+
+            // Enforce Fullscreen/Borderless if windowed games are not explicitly allowed.
+            if (!isFullscreen && !includeWindowedGames)
+                return false;
+
+            var width = windowRect.Right - windowRect.Left;
+            var height = windowRect.Bottom - windowRect.Top;
+            if (width < 320 || height < 240)
+                return false;
+
+            return true;
         }
         catch
         {
             hwnd = 0;
             pid = 0;
             monitor = default;
+            isFullscreen = false;
             return false;
         }
     }
@@ -302,13 +320,14 @@ internal static class Win32
 
         private bool QuerySnapshotTable()
         {
+            int returnedLength;
             while (true)
             {
                 var status = NtQuerySystemInformation(
                     SystemProcessInformation,
                     _buffer,
                     _capacity,
-                    out var returnedLength);
+                    out returnedLength);
 
                 if (status == 0)
                     break;
@@ -328,16 +347,17 @@ internal static class Win32
                 return false;
             }
 
-            ParseSnapshotTable();
+            ParseSnapshotTable(returnedLength);
             return true;
         }
 
-        private void ParseSnapshotTable()
+        private void ParseSnapshotTable(int validBytes)
         {
             var baseAddress = _buffer;
             var offset = 0;
+            var limit = Math.Min(_capacity, validBytes > 0 ? validBytes : _capacity);
 
-            while (offset + ProcessNameOffset < _capacity)
+            while (offset + MinEntryRequiredSize <= limit)
             {
                 var entry = IntPtr.Add(baseAddress, offset);
                 var nextOffset = unchecked((uint)Marshal.ReadInt32(entry, 0));
@@ -351,10 +371,7 @@ internal static class Win32
                     _requested[pid] = new ProcessSnapshot(name ?? string.Empty, workingSet, createTime);
                 }
 
-                if (nextOffset == 0)
-                    break;
-
-                if (nextOffset > int.MaxValue - offset)
+                if (nextOffset == 0 || nextOffset > (uint)(limit - offset))
                     break;
 
                 offset += (int)nextOffset;
@@ -423,13 +440,14 @@ internal readonly record struct GameInfo(
 
 internal static class GameDetector
 {
-    public static bool TryGet(Win32.ProcessSnapshotTable snapshots, out GameInfo game)
+    public static bool TryGet(
+        Win32.ProcessSnapshotTable snapshots,
+        bool includeWindowedGames,
+        out GameInfo game)
     {
         game = default;
 
-        // Cheap rejection first: only a fullscreen foreground window can start a session.
-        // The process-table query happens only after this passes.
-        if (!Win32.TryGetForegroundFullscreenCandidate(out var hwnd, out var pid, out var monitor))
+        if (!Win32.TryGetForegroundCandidate(includeWindowedGames, out var hwnd, out var pid, out var monitor, out var isFullscreen))
             return false;
 
         if (pid <= 0 || pid == Environment.ProcessId)
@@ -449,7 +467,7 @@ internal static class GameDetector
             process.CreateTime,
             monitor,
             hwnd,
-            true,
+            isFullscreen,
             Win32.GetForegroundWindow() == hwnd,
             Win32.IsWindowVisible(hwnd),
             Win32.IsIconic(hwnd));
@@ -469,7 +487,7 @@ internal static class GameDetector
         var name = Path.GetFileNameWithoutExtension(process.Name);
         if (!string.Equals(name, tracked.Name, StringComparison.OrdinalIgnoreCase) ||
             (tracked.CreateTime != 0 && process.CreateTime != 0 && process.CreateTime != tracked.CreateTime))
-            return false; // PID was recycled.
+            return false;
 
         if (IsExecutableBlacklisted(name))
             return false;

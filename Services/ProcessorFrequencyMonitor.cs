@@ -24,13 +24,7 @@ public sealed class ProcessorFrequencyMonitor : IDisposable
     private bool _initialized;
     private bool _disposed;
 
-    // Each core is classified once, from its first few samples: if "Processor Frequency" stays
-    // constant it is the nominal/base clock and is scaled by "% Processor Performance"; if it
-    // moves it already reports the actual clock and is used as-is. The result is final, so a core
-    // can neither flip-flop later nor be scaled twice. Until every core is classified Sample()
-    // returns nothing (N/A) rather than a possibly wrong value; this only happens on the first
-    // sampling after launch, a few hundred milliseconds at the 100 ms telemetry rate.
-    private const int ClassificationSamples = 3;
+    private const int ClassificationSamples = 8;
 
     private readonly Dictionary<int, double> _lastNominal = new();
     private readonly Dictionary<int, int> _stableSamples = new();
@@ -51,7 +45,6 @@ public sealed class ProcessorFrequencyMonitor : IDisposable
         [FieldOffset(0)] public uint CStatus;
         [FieldOffset(8)] public double DoubleValue;
     }
-
 
     private bool Initialize()
     {
@@ -120,7 +113,7 @@ public sealed class ProcessorFrequencyMonitor : IDisposable
                     }
                     else if (samples >= ClassificationSamples)
                     {
-                        _classifiedCores.Add(key); // Varies: already the actual clock.
+                        _classifiedCores.Add(key);
                     }
                     else
                     {

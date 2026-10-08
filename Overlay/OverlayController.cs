@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Threading;
 using Clockwork.Services;
 using Clockwork.ViewModels;
@@ -25,7 +26,6 @@ public sealed class OverlayController : IDisposable
         "All Input-to-Photon Latency",
     };
 
-
     private readonly MainWindowViewModel _settings;
     private readonly OverlayViewModel _vm = new();
     private readonly PresentMonMonitor _presentMon = new();
@@ -39,18 +39,10 @@ public sealed class OverlayController : IDisposable
     private readonly Dictionary<string, OverlayLine> _lineByLabel = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _lastPostedValues = new(StringComparer.Ordinal);
 
-    // Settings version the posted-value cache belongs to. Guarded by _lineCacheSync.
     private int _lastPostedVersion;
 
-    // Game detection and window placement: process-table refresh, window state, show/hide.
     private const int DetectionIntervalMs = 500;
-
-    // Telemetry (PresentMon poll, PDH, RAM and so on). FPS, latency, playtime and system time
-    // run on the separate 20 ms fast loop.
     private const int TelemetryIntervalMs = 100;
-
-    // While the overlay is not visible nothing is displayed, so telemetry polls at the
-    // detection rate instead (frames are still consumed, so Avg FPS keeps accumulating).
     private const int HiddenTelemetryDivisor = DetectionIntervalMs / TelemetryIntervalMs;
 
     private readonly Task _detectionTask;
@@ -65,11 +57,8 @@ public sealed class OverlayController : IDisposable
     private int _trackedRefreshMisses;
     private bool _overlayWanted;
     private int _hiddenTelemetryTicks;
-    private int _lastSystemTimeStamp = -1;
-    private string _lastSystemTimeText = string.Empty;
 
-    // A transient process-table failure should not immediately end a running session.
-    private const int MaxTrackedRefreshMisses = 8; // 4 seconds at the 500 ms detection loop.
+    private const int MaxTrackedRefreshMisses = 8;
 
     private OverlayWindow? _window;
     private GameInfo _lastUiGame;
@@ -102,6 +91,14 @@ public sealed class OverlayController : IDisposable
         if (sender is not OptionViewModel || e.PropertyName != nameof(OptionViewModel.IsOn) || _disposed)
             return;
 
+        if (_settings.IsBatchUpdating)
+            return;
+
+        RebuildEnabledStats();
+    }
+
+    private void RebuildEnabledStats()
+    {
         var snapshot = BuildEnabledStatsSnapshot();
         Volatile.Write(ref _enabledStats, snapshot);
         var newVersion = Interlocked.Increment(ref _enabledStatsVersion);
@@ -125,6 +122,12 @@ public sealed class OverlayController : IDisposable
     {
         if (_disposed)
             return;
+
+        if (e.PropertyName == nameof(MainWindowViewModel.IsBatchUpdating) && !_settings.IsBatchUpdating)
+        {
+            RebuildEnabledStats();
+            return;
+        }
 
         if (e.PropertyName is nameof(MainWindowViewModel.OverlayPositionX)
             or nameof(MainWindowViewModel.OverlayPositionY)
@@ -222,14 +225,8 @@ public sealed class OverlayController : IDisposable
         }
     }
 
-    /// <summary>
-    /// Runs every 500 ms: finds and tracks the game, manages the session, and decides whether
-    /// the overlay is shown and where it sits. It does not read any telemetry values.
-    /// </summary>
     private void UpdateDetection()
     {
-        // Read the version first: the snapshot is always written before the version is bumped, so
-        // the snapshot read here is at least as new as this version.
         var version = Volatile.Read(ref _enabledStatsVersion);
         var enabled = Volatile.Read(ref _enabledStats);
 
@@ -261,7 +258,7 @@ public sealed class OverlayController : IDisposable
         {
             if (game.Pid != _gamePid)
             {
-                _gamePid = game.Pid;
+                Volatile.Write(ref _gamePid, game.Pid);
                 _trackedGame = game;
                 _trackedRefreshMisses = 0;
                 _sessionStartTimestamp = Stopwatch.GetTimestamp();
@@ -281,11 +278,6 @@ public sealed class OverlayController : IDisposable
         PostUi(() => ApplyDetectionUpdate(version, game, showOverlay));
     }
 
-    /// <summary>
-    /// Runs every 100 ms: starts/updates PresentMon tracking for the current plan, reads the
-    /// telemetry snapshot and posts the changed values. FPS, latency, playtime and system time
-    /// are handled by the 20 ms fast loop instead.
-    /// </summary>
     private void UpdateTelemetry()
     {
         var version = Volatile.Read(ref _enabledStatsVersion);
@@ -301,7 +293,6 @@ public sealed class OverlayController : IDisposable
             game = tracked;
         }
 
-        // Nothing is displayed while the overlay is hidden, so poll at the detection rate then.
         if (!Volatile.Read(ref _overlayWanted) && ++_hiddenTelemetryTicks < HiddenTelemetryDivisor)
             return;
         _hiddenTelemetryTicks = 0;
@@ -309,7 +300,6 @@ public sealed class OverlayController : IDisposable
         PresentMonSnapshot snapshot;
         lock (_presentMonSync)
         {
-            // The session may have ended or switched games since the game was read above.
             if (Volatile.Read(ref _gamePid) != game.Pid)
                 return;
 
@@ -350,21 +340,19 @@ public sealed class OverlayController : IDisposable
     }
 
     private static bool IsFastOwned(string name) =>
-        name is "FPS" or "System Time" or "Session Playtime" || LatencyStats.Contains(name);
+        name is "FPS" || LatencyStats.Contains(name);
 
     private void UpdateFastTelemetry()
     {
         var version = Volatile.Read(ref _enabledStatsVersion);
         var enabled = Volatile.Read(ref _enabledStats);
-        if (!enabled.FastPlan.HasAny && !enabled.PlaytimeEnabled && !enabled.SystemTimeEnabled)
+        if (!enabled.FastPlan.HasAny)
             return;
 
         GameInfo? game;
-        long sessionStart;
         lock (_stateSync)
         {
             game = _trackedGame;
-            sessionStart = _sessionStartTimestamp;
         }
 
         if (game is null)
@@ -374,17 +362,10 @@ public sealed class OverlayController : IDisposable
         }
 
         PresentMonFastFrameSnapshot fast;
-        if (enabled.FastPlan.HasAny)
+        lock (_presentMonSync)
         {
-            lock (_presentMonSync)
-            {
-                _presentMon.UpdateFastFrameMetrics();
-                fast = _presentMon.GetFastFrameSnapshot(enabled.FastPlan);
-            }
-        }
-        else
-        {
-            fast = new PresentMonFastFrameSnapshot(null, null, null, null, null, null, null, null, null);
+            _presentMon.UpdateFastFrameMetrics();
+            fast = _presentMon.GetFastFrameSnapshot(enabled.FastPlan);
         }
 
         var updates = new List<LineValueUpdate>(10);
@@ -418,27 +399,6 @@ public sealed class OverlayController : IDisposable
                 updates.Add(new LineValueUpdate(name, value));
         }
 
-        if (enabled.PlaytimeEnabled && sessionStart != 0)
-        {
-            var playtime = FormatPlaytime(GetSessionElapsed(sessionStart));
-            if (MarkValueChanged("Session Playtime", playtime, version))
-                updates.Add(new LineValueUpdate("Session Playtime", playtime));
-        }
-
-        if (enabled.SystemTimeEnabled)
-        {
-            var now = DateTime.Now;
-            var stamp = now.Hour * 60 + now.Minute;
-            if (stamp != _lastSystemTimeStamp)
-            {
-                _lastSystemTimeStamp = stamp;
-                _lastSystemTimeText = now.ToString("HH:mm");
-            }
-
-            if (MarkValueChanged("System Time", _lastSystemTimeText, version))
-                updates.Add(new LineValueUpdate("System Time", _lastSystemTimeText));
-        }
-
         if (updates.Count == 0)
             return;
 
@@ -447,6 +407,16 @@ public sealed class OverlayController : IDisposable
 
     private bool TryGetTrackedGame(out GameInfo game)
     {
+        if (GameDetector.TryGet(_processSnapshots, _settings.IncludeWindowedGames, out var foregroundGame))
+        {
+            lock (_stateSync)
+            {
+                _trackedRefreshMisses = 0;
+                game = foregroundGame;
+                return true;
+            }
+        }
+
         lock (_stateSync)
         {
             if (_trackedGame is { } tracked)
@@ -460,8 +430,8 @@ public sealed class OverlayController : IDisposable
                 if (GameDetector.TryRefreshTracked(_processSnapshots, tracked, out var refreshed))
                 {
                     _trackedRefreshMisses = 0;
-                    _trackedGame = refreshed;
-                    game = refreshed;
+                    var backgroundTracked = refreshed with { IsForeground = false };
+                    game = backgroundTracked;
                     return true;
                 }
 
@@ -481,15 +451,15 @@ public sealed class OverlayController : IDisposable
                         IsMinimized = true,
                     };
                 }
+                else
+                {
+                    windowRefreshed = windowRefreshed with { IsForeground = false };
+                }
 
-                _trackedGame = windowRefreshed;
                 game = windowRefreshed;
                 return true;
             }
         }
-
-        if (GameDetector.TryGet(_processSnapshots, out game))
-            return true;
 
         game = default;
         return false;
@@ -577,9 +547,6 @@ public sealed class OverlayController : IDisposable
     {
         lock (_lineCacheSync)
         {
-            // A tick that began before the latest settings change would be discarded by the UI
-            // (version mismatch). It must neither post nor touch the cache, otherwise the cache
-            // claims a value was delivered to a line that was rebuilt and is still empty.
             if (version != _lastPostedVersion)
                 return false;
 
@@ -603,7 +570,12 @@ public sealed class OverlayController : IDisposable
 
         if (showOverlay)
         {
-            _window ??= new OverlayWindow { DataContext = _vm };
+            if (_window is null)
+            {
+                _window = new OverlayWindow { DataContext = _vm };
+                _window.SizeChanged += OnOverlayWindowSizeChanged;
+            }
+
             if (!_window.IsVisible)
                 _window.Show();
             ApplyOverlayPlacement(game);
@@ -616,12 +588,21 @@ public sealed class OverlayController : IDisposable
         UpdateFastLoopState();
     }
 
+    private void OnOverlayWindowSizeChanged(object? sender, SizeChangedEventArgs e)
+    {
+        if (_disposed || !_hasLastUiGame || _window is not { IsVisible: true })
+            return;
+
+        _lastAppliedPositionX = int.MinValue;
+        _lastAppliedPositionY = int.MinValue;
+        ApplyOverlayPlacement(_lastUiGame);
+    }
+
     private void ApplyLineValues(int version, IReadOnlyList<LineValueUpdate> updates)
     {
         if (_disposed || version != Volatile.Read(ref _enabledStatsVersion))
             return;
 
-        // Cheap when nothing changed; guarantees the lines exist before values are applied.
         SyncLines(Volatile.Read(ref _enabledStats).Names);
 
         foreach (var item in updates)
@@ -651,8 +632,6 @@ public sealed class OverlayController : IDisposable
                 return;
         }
 
-        // Update the collection in place so lines that stay keep their current values and only
-        // the lines that were actually toggled are added, removed or moved.
         var wanted = new HashSet<string>(names, StringComparer.Ordinal);
         for (var i = lines.Count - 1; i >= 0; i--)
         {
@@ -693,8 +672,12 @@ public sealed class OverlayController : IDisposable
         _window.SetScale(_settings.OverlayScale / 100.0);
         _window.SetAppearance(_settings.OverlayBackgroundEnabled, _settings.OverlayBackgroundOpacity);
 
-        // Recalculate this every slow telemetry update because the game may move or resize even
-        // while its PID remains unchanged. The actual Position assignment is cached below.
+        if (_window.Bounds.Width <= 0 || _window.Bounds.Height <= 0)
+        {
+            _window.Position = new PixelPoint(game.Monitor.Left + 16, game.Monitor.Top + 16);
+            return;
+        }
+
         if (game.WindowHandle != 0 &&
             Win32.TryGetClientAreaScreenRect(game.WindowHandle, out var clientRect))
         {
@@ -734,8 +717,7 @@ public sealed class OverlayController : IDisposable
     private void UpdateFastLoopState()
     {
         var enabled = Volatile.Read(ref _enabledStats);
-        var active = _window is { IsVisible: true } &&
-                     (enabled.FastPlan.HasAny || enabled.PlaytimeEnabled || enabled.SystemTimeEnabled);
+        var active = _window is { IsVisible: true } && enabled.FastPlan.HasAny;
         Volatile.Write(ref _fastLoopActive, active);
         if (active)
             _fastWake.Set();
@@ -752,7 +734,7 @@ public sealed class OverlayController : IDisposable
     {
         lock (_stateSync)
         {
-            _gamePid = 0;
+            Volatile.Write(ref _gamePid, 0);
             _trackedGame = null;
             _trackedRefreshMisses = 0;
             _sessionStartTimestamp = 0;
@@ -879,19 +861,21 @@ public sealed class OverlayController : IDisposable
 
         bool workersStopped;
         try { workersStopped = Task.WaitAll([_detectionTask, _telemetryTask, _fastTask], TimeSpan.FromSeconds(1)); }
-        catch { workersStopped = true; } // WaitAll only throws once every task has finished.
+        catch { workersStopped = true; }
+
+        if (_window is not null)
+        {
+            _window.SizeChanged -= OnOverlayWindowSizeChanged;
+            _window.Close();
+        }
 
         if (!workersStopped)
         {
-            // A worker is stuck in a PresentMon/PDH call. Do not block shutdown on it, and do not
-            // free native resources it may still be using; the OS reclaims them on process exit.
-            _window?.Close();
             GC.SuppressFinalize(this);
             return;
         }
 
         EndSession();
-        _window?.Close();
         lock (_presentMonSync)
             _presentMon.Dispose();
         _processorFrequency.Dispose();

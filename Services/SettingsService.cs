@@ -18,6 +18,7 @@ public sealed class SettingsService
         public double Scale { get; set; } = 100.0;
         public bool BackgroundEnabled { get; set; } = true;
         public double BackgroundOpacity { get; set; } = 94.0;
+        public bool IncludeWindowedGames { get; set; } = false;
     }
 
     public sealed record LoadedSettings(
@@ -26,7 +27,8 @@ public sealed class SettingsService
         double OverlayPositionY,
         double OverlayScale,
         bool OverlayBackgroundEnabled,
-        double OverlayBackgroundOpacity);
+        double OverlayBackgroundOpacity,
+        bool IncludeWindowedGames);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -48,9 +50,6 @@ public sealed class SettingsService
 
             var json = File.ReadAllText(_filePath);
 
-            // Distinguish the current object format from Clockwork's original flat dictionary.
-            // A flat dictionary can also deserialize into SettingsFile with an empty Options
-            // property, so the presence of the actual "Options" property must be checked first.
             using var document = JsonDocument.Parse(json);
             bool isCurrentFormat = document.RootElement.ValueKind == JsonValueKind.Object
                 && document.RootElement.TryGetProperty("Options", out _);
@@ -66,11 +65,11 @@ public sealed class SettingsService
                         ClampPosition(file.Overlay?.PositionY ?? 0.0),
                         ClampScale(file.Overlay?.Scale ?? 100.0),
                         file.Overlay?.BackgroundEnabled ?? true,
-                        ClampOpacity(file.Overlay?.BackgroundOpacity ?? 94.0));
+                        ClampOpacity(file.Overlay?.BackgroundOpacity ?? 94.0),
+                        file.Overlay?.IncludeWindowedGames ?? false);
                 }
             }
 
-            // Backward compatibility with Clockwork's original flat Dictionary<string, bool> file.
             var oldOptions = JsonSerializer.Deserialize<Dictionary<string, bool>>(json, JsonOptions);
             return oldOptions is null
                 ? Empty()
@@ -80,11 +79,11 @@ public sealed class SettingsService
                     0.0,
                     100.0,
                     true,
-                    94.0);
+                    94.0,
+                    false);
         }
         catch
         {
-            // A broken/missing settings file should never prevent Clockwork from starting.
             return Empty();
         }
     }
@@ -95,7 +94,8 @@ public sealed class SettingsService
         double overlayPositionY,
         double overlayScale,
         bool overlayBackgroundEnabled,
-        double overlayBackgroundOpacity)
+        double overlayBackgroundOpacity,
+        bool includeWindowedGames)
     {
         try
         {
@@ -115,6 +115,7 @@ public sealed class SettingsService
                     Scale = ClampScale(overlayScale),
                     BackgroundEnabled = overlayBackgroundEnabled,
                     BackgroundOpacity = ClampOpacity(overlayBackgroundOpacity),
+                    IncludeWindowedGames = includeWindowedGames,
                 },
             };
 
@@ -126,7 +127,6 @@ public sealed class SettingsService
         }
         catch
         {
-            // Settings are non-critical; ignore write failures and keep the app running.
         }
     }
 
@@ -136,7 +136,8 @@ public sealed class SettingsService
         0.0,
         100.0,
         true,
-        94.0);
+        94.0,
+        false);
 
     private static double ClampPosition(double value) => double.IsFinite(value) ? Math.Clamp(value, 0.0, 100.0) : 0.0;
     private static double ClampScale(double value) => double.IsFinite(value) ? Math.Clamp(value, 50.0, 200.0) : 100.0;

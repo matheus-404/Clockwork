@@ -24,11 +24,31 @@ internal sealed class SingleInstance : IDisposable
     /// </summary>
     public static bool TryAcquire(out SingleInstance? instance)
     {
-        var mutex = new Mutex(true, $@"Local\{Id}-mutex", out var createdNew);
         var showEvent = new EventWaitHandle(
             false, EventResetMode.AutoReset, $@"Local\{Id}-show");
 
-        if (!createdNew)
+        Mutex mutex;
+        bool acquired;
+        try
+        {
+            mutex = new Mutex(false, $@"Local\{Id}-mutex");
+            try
+            {
+                acquired = mutex.WaitOne(0, false);
+            }
+            catch (AbandonedMutexException)
+            {
+                acquired = true;
+            }
+        }
+        catch
+        {
+            showEvent.Dispose();
+            instance = null;
+            return false;
+        }
+
+        if (!acquired)
         {
             try { showEvent.Set(); }
             finally
@@ -61,7 +81,6 @@ internal sealed class SingleInstance : IDisposable
         }.Start();
     }
 
-    // Must be called on the thread that acquired the mutex (Main).
     public void Dispose()
     {
         _cts.Cancel();

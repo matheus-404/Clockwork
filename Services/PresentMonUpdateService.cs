@@ -5,6 +5,7 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace Clockwork.Services;
 
@@ -19,7 +20,7 @@ public sealed class PresentMonUpdateService : IDisposable
 
     private const int ErrorCancelled = 1223; // user declined the UAC prompt
 
-    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(8);
 
     private readonly HttpClient _httpClient;
 
@@ -113,8 +114,11 @@ public sealed class PresentMonUpdateService : IDisposable
             await DownloadMsiAsync(msi.BrowserDownloadUrl, temporaryMsi, cancellationToken)
                 .ConfigureAwait(false);
 
-            if (!string.IsNullOrWhiteSpace(msi.Digest) &&
-                !await VerifySha256Async(temporaryMsi, msi.Digest!, cancellationToken).ConfigureAwait(false))
+            var expectedSha = await TryGetExpectedSha256Async(release, msi, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (!string.IsNullOrWhiteSpace(expectedSha) &&
+                !await VerifySha256Async(temporaryMsi, expectedSha, cancellationToken).ConfigureAwait(false))
             {
                 return installedAvailable
                     ? PresentMonStartupResult.Failed(installed, "The downloaded PresentMon MSI failed its SHA-256 integrity check.")
@@ -176,8 +180,7 @@ public sealed class PresentMonUpdateService : IDisposable
             HttpCompletionOption.ResponseHeadersRead,
             cancellationToken).ConfigureAwait(false);
 
-        if (response.StatusCode == HttpStatusCode.Forbidden ||
-            response.StatusCode == HttpStatusCode.TooManyRequests)
+        if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)
         {
             throw new PresentMonUpdateCheckException(
                 false,
@@ -236,6 +239,54 @@ public sealed class PresentMonUpdateService : IDisposable
         await source.CopyToAsync(target, cancellationToken).ConfigureAwait(false);
     }
 
+    private async Task<string?> TryGetExpectedSha256Async(
+        PresentMonRelease release,
+        PresentMonAsset msiAsset,
+        CancellationToken cancellationToken)
+    {
+        var checksumAsset = release.Assets.FirstOrDefault(a =>
+            a.Name.EndsWith(".sha256", StringComparison.OrdinalIgnoreCase) ||
+            a.Name.Contains("checksum", StringComparison.OrdinalIgnoreCase) ||
+            a.Name.Contains("sha256", StringComparison.OrdinalIgnoreCase));
+
+        if (checksumAsset is not null && !string.IsNullOrWhiteSpace(checksumAsset.BrowserDownloadUrl))
+        {
+            try
+            {
+                using var response = await _httpClient.GetAsync(
+                    checksumAsset.BrowserDownloadUrl,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    cancellationToken).ConfigureAwait(false);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    var text = await response.Content.ReadAsStringAsync(cancellationToken)
+                        .ConfigureAwait(false);
+
+                    var match = Regex.Match(text, @"\b([a-fA-F0-9]{64})\b");
+                    if (match.Success)
+                        return match.Groups[1].Value;
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(release.Body))
+        {
+            var match = Regex.Match(release.Body, $@"\b([a-fA-F0-9]{{64}})\b.*{Regex.Escape(msiAsset.Name)}", RegexOptions.IgnoreCase);
+            if (match.Success)
+                return match.Groups[1].Value;
+
+            var reverseMatch = Regex.Match(release.Body, $@"{Regex.Escape(msiAsset.Name)}.*\b([a-fA-F0-9]{{64}})\b", RegexOptions.IgnoreCase);
+            if (reverseMatch.Success)
+                return reverseMatch.Groups[1].Value;
+        }
+
+        return null;
+    }
+
     private static async Task<bool> VerifySha256Async(
         string path,
         string digest,
@@ -261,9 +312,6 @@ public sealed class PresentMonUpdateService : IDisposable
         string msiPath,
         CancellationToken cancellationToken)
     {
-        // Clockwork itself runs as a normal user. Installing PresentMon's MSI needs
-        // administrator rights, so only this step is launched elevated (one UAC prompt).
-        // If Clockwork is already elevated, "runas" simply runs without a prompt.
         var startInfo = new ProcessStartInfo
         {
             FileName = Path.Combine(Environment.SystemDirectory, "msiexec.exe"),
@@ -302,24 +350,23 @@ public sealed class PresentMonUpdateService : IDisposable
 
     private static Version? GetInstalledVersion()
     {
-        if (!PresentMonNative.Api.TryLoad(out var api, out _)
-            || api is null)
+        foreach (var path in PresentMonNative.GetCandidatePaths())
         {
-            return null;
+            if (!File.Exists(path))
+                continue;
+
+            try
+            {
+                var fileVersion = FileVersionInfo.GetVersionInfo(path).FileVersion;
+                if (Version.TryParse(NormalizeVersion(fileVersion), out var version))
+                    return NormalizeToReleaseVersion(version);
+            }
+            catch
+            {
+            }
         }
 
-        try
-        {
-            var fileVersion = FileVersionInfo.GetVersionInfo(api.LoadedPath).FileVersion;
-            if (Version.TryParse(NormalizeVersion(fileVersion), out var version))
-                return NormalizeToReleaseVersion(version);
-
-            return null;
-        }
-        finally
-        {
-            api.Dispose();
-        }
+        return null;
     }
 
     private static PresentMonAsset? SelectMsi(PresentMonRelease release)
@@ -364,12 +411,10 @@ public sealed class PresentMonUpdateService : IDisposable
         }
         catch
         {
-            // Best-effort cleanup only.
         }
     }
 
     public void Dispose() => _httpClient.Dispose();
-
 
     private sealed class PresentMonUpdateCheckException : Exception
     {
@@ -392,6 +437,9 @@ public sealed class PresentMonUpdateService : IDisposable
         [JsonPropertyName("tag_name")]
         public string TagName { get; init; } = string.Empty;
 
+        [JsonPropertyName("body")]
+        public string? Body { get; init; }
+
         [JsonPropertyName("assets")]
         public List<PresentMonAsset> Assets { get; init; } = [];
     }
@@ -403,9 +451,6 @@ public sealed class PresentMonUpdateService : IDisposable
 
         [JsonPropertyName("browser_download_url")]
         public string BrowserDownloadUrl { get; init; } = string.Empty;
-
-        [JsonPropertyName("digest")]
-        public string? Digest { get; init; }
     }
 
     private readonly record struct MsiInstallResult(bool Success, string Message);

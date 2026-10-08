@@ -16,9 +16,11 @@ public sealed class MainWindowViewModel : ViewModelBase
     private double _overlayScale = 100.0;
     private bool _overlayBackgroundEnabled = true;
     private double _overlayBackgroundOpacity = 94.0;
+    private bool _includeWindowedGames = false;
     private bool _suppressSettingsSave;
     private readonly DispatcherTimer _settingsSaveTimer = new() { Interval = TimeSpan.FromMilliseconds(400) };
     private bool _savePending;
+    private bool _isBatchUpdating;
 
     public MainWindowViewModel()
     {
@@ -111,7 +113,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         _overlayScale = loaded.OverlayScale;
         _overlayBackgroundEnabled = loaded.OverlayBackgroundEnabled;
         _overlayBackgroundOpacity = loaded.OverlayBackgroundOpacity;
-
+        _includeWindowedGames = loaded.IncludeWindowedGames;
 
         foreach (var section in Sections)
         {
@@ -128,6 +130,8 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     public IReadOnlyList<SectionViewModel> Sections { get; }
+
+    public bool IsBatchUpdating => _isBatchUpdating;
 
     public SectionViewModel SelectedSection
     {
@@ -207,6 +211,18 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
 
+    public bool IncludeWindowedGames
+    {
+        get => _includeWindowedGames;
+        set
+        {
+            if (!SetField(ref _includeWindowedGames, value))
+                return;
+
+            RequestSettingsSave();
+        }
+    }
+
     private void SubscribeToOptionChanges()
     {
         foreach (var section in Sections)
@@ -221,7 +237,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (sender is not OptionViewModel || e.PropertyName != nameof(OptionViewModel.IsOn))
             return;
 
-        if (_suppressSettingsSave)
+        if (_suppressSettingsSave || _isBatchUpdating)
             return;
 
         RequestSettingsSave();
@@ -230,6 +246,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     public void ResetStatisticsToDefault()
     {
         _suppressSettingsSave = true;
+        _isBatchUpdating = true;
         try
         {
             foreach (var section in Sections)
@@ -240,9 +257,11 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
         finally
         {
+            _isBatchUpdating = false;
             _suppressSettingsSave = false;
         }
 
+        OnPropertyChanged(nameof(IsBatchUpdating));
         RequestSettingsSave();
     }
 
@@ -277,14 +296,14 @@ public sealed class MainWindowViewModel : ViewModelBase
             OverlayPositionY,
             OverlayScale,
             OverlayBackgroundEnabled,
-            OverlayBackgroundOpacity);
+            OverlayBackgroundOpacity,
+            IncludeWindowedGames);
         _savePending = false;
     }
 
     private static string GetOptionKey(SectionViewModel section, OptionViewModel option) =>
         $"{section.Name}/{option.Name}";
 
-    // Settings saved before "CPU Frequency (per core)" was renamed to "CPU Frequency".
     private static bool TryGetLegacyOptionState(
         IReadOnlyDictionary<string, bool> states,
         SectionViewModel section,
@@ -304,5 +323,4 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     private static double ClampOpacity(double value) =>
         double.IsFinite(value) ? Math.Clamp(value, 0.0, 100.0) : 94.0;
-
 }
