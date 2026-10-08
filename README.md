@@ -17,8 +17,8 @@ The name **Clockwork** is inspired by *...Like Clockwork* by **Queens of the Sto
 - Per-logical-processor CPU frequency monitoring through Windows Performance Data Helper (PDH).
 - RAM usage and game/process working-set monitoring.
 - Session playtime and system clock information.
-- Automatic detection of fullscreen applications/games without opening the game process for memory access.
-- Two-stage telemetry loop: a slower session/process loop and a high-frequency frame/latency loop that only runs when required.
+- Foreground-first detection of fullscreen and borderless games, with background sessions retained when switching between applications. Windowed-game tracking is available as an opt-in setting.
+- Telemetry loops are split by workload: a detection/session loop, a regular telemetry loop, and a 20 ms frame-metrics loop that runs only when high-frequency frame metrics are enabled.
 - Settings are persisted locally so selected statistics do not need to be configured again after every launch.
 - System-tray operation: closing the main window hides Clockwork to the tray; **Close Clockwork** in the tray menu performs the real shutdown.
 - Automatic PresentMon installation/update from the official PresentMon GitHub release feed.
@@ -34,7 +34,7 @@ Clockwork consists of two primary parts:
 1. **The control application** — where statistics are enabled, overlay behavior is configured, and the current configuration is saved.
 2. **The in-game overlay** — a small, click-through window that appears only when a tracked fullscreen game/application is active and visible.
 
-The overlay is intentionally separate from the settings UI, so the monitoring display can stay minimal while configuration remains available from the main application window.
+The overlay is intentionally separate from the settings UI, so the monitoring display can stay minimal while configuration remains available from the main application window. By default it is gated to fullscreen or borderless windows that cover their monitor. Enable **Include windowed games** in settings to track floating game windows.
 
 ---
 
@@ -143,7 +143,7 @@ The session average uses the number of measured frames divided by the elapsed se
 
 ### 1% Low and 0.1% Low
 
-The low-FPS implementation uses a **time-based percentile approach**. Frame times are sorted from worst to best, and the slowest frame times are accumulated until they account for the requested fraction of the total measured frame time. The frame time at that boundary is converted back into FPS.
+The low-FPS implementation uses a **time-based percentile approach**. Session data is preserved across foreground switches between tracked games. Frame times are sorted from worst to best, and the slowest frame times are accumulated until they account for the requested fraction of the total measured frame time. The frame time at that boundary is converted back into FPS.
 
 This is intentionally different from simply averaging the slowest 1% or 0.1% of frames. The implementation was chosen to follow the same general time-based low-FPS methodology associated with MSI Afterburner/RTSS-style reporting; it should not be interpreted as a guarantee of bit-for-bit numerical identity with another monitoring application.
 
@@ -151,7 +151,9 @@ This is intentionally different from simply averaging the slowest 1% or 0.1% of 
 
 ## 🎮 Game / Application Detection
 
-Clockwork periodically checks the foreground desktop state to determine whether a suitable fullscreen application is active.
+Clockwork prioritizes the active foreground window when selecting a tracked game, so focusing another eligible game switches the overlay and telemetry to that application. Sessions for games moved to the background are retained as inactive sessions during Alt-Tab, preserving their playtime and frame-stat calculations.
+
+By default, a candidate window must cover its monitor (fullscreen or borderless) to qualify. This boundary check helps avoid tracking productivity apps and web pages. The **Include windowed games** setting opts into tracking windowed games.
 
 The process table is collected through the native Windows `NtQuerySystemInformation(SystemProcessInformation)` process snapshot interface, and window/monitor state is obtained through Win32 APIs.
 
@@ -167,7 +169,7 @@ The detector considers information such as:
 - window visibility
 - minimized state
 
-A tracked session is maintained through temporary process-table misses so that a short refresh failure does not immediately tear down an active overlay session.
+A tracked session is maintained through temporary process-table misses so that a short refresh failure does not immediately tear down an active overlay session. Background sessions remain available while another eligible game is foregrounded.
 
 Clockwork also maintains a large ignore list for applications where an in-game monitoring overlay would not be useful, such as hardware monitors, launchers, editors, terminals, media players, and other desktop tools.
 
@@ -329,6 +331,7 @@ Clockwork stores user settings outside the application installation directory, u
 This includes:
 
 - enabled/disabled statistics
+- whether windowed games are included in detection
 - overlay X position
 - overlay Y position
 - overlay scale
@@ -354,7 +357,7 @@ Used for tasks such as:
 - normal telemetry polling
 - overlay visibility decisions
 
-**Fast telemetry loop:** approximately every **20 ms**, but only while high-frequency frame/latency statistics require it.
+**Fast telemetry loop:** approximately every **20 ms**, but only while high-frequency frame metrics require it. Session playtime and system time updates are handled outside this fast loop.
 
 Used for:
 
@@ -378,7 +381,7 @@ Frame timing uses a fixed-size `double[20000]` ring buffer and maintains a runni
 
 ### UI updates
 
-Telemetry collection occurs on worker tasks. Only the visual update portion is posted back to Avalonia's UI dispatcher.
+Telemetry collection occurs on worker tasks, with shared telemetry bindings and metrics synchronized during polling. Only visual updates are posted back to Avalonia's UI dispatcher; startup dialogs and window-state checks are also marshaled to the UI thread.
 
 ---
 
