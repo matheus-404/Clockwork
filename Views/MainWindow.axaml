@@ -319,6 +319,7 @@
                         HorizontalAlignment="Stretch"
                         VerticalAlignment="Stretch"
                         Background="#080B11"
+                        SizeChanged="OnOverlayPreviewCanvasSizeChanged"
                         PointerPressed="OnOverlayPreviewPointerPressed"
                         PointerMoved="OnOverlayPreviewPointerMoved"
                         PointerReleased="OnOverlayPreviewPointerReleased">

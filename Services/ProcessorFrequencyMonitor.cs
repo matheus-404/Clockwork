@@ -2,6 +2,8 @@ using System.Runtime.InteropServices;
 
 namespace Clockwork.Services;
 
+public readonly record struct CpuCoreFrequency(int Node, int Processor, double FrequencyMHz);
+
 /// <summary>
 /// Persistent PDH counters for per-logical-processor frequency. The counters are created once
 /// and sampled only while the corresponding option is enabled.
@@ -66,15 +68,15 @@ public sealed class ProcessorFrequencyMonitor : IDisposable
         return true;
     }
 
-    public double[] Sample()
+    public CpuCoreFrequency[] Sample()
     {
         if (_disposed || !Initialize() || PdhCollectQueryData(_query) != ERROR_SUCCESS)
-            return Array.Empty<double>();
+            return Array.Empty<CpuCoreFrequency>();
 
         var frequencies = ReadCounterArray(_frequencyCounter);
         var performance = ReadCounterArray(_performanceCounter);
         if (frequencies.Count == 0)
-            return Array.Empty<double>();
+            return Array.Empty<CpuCoreFrequency>();
 
         var performanceByCore = performance.Count == 0
             ? new Dictionary<int, double>()
@@ -130,9 +132,12 @@ public sealed class ProcessorFrequencyMonitor : IDisposable
         }
 
         if (classifying)
-            return Array.Empty<double>();
+            return Array.Empty<CpuCoreFrequency>();
 
-        return result.Values.ToArray();
+        return result.Select(static pair => new CpuCoreFrequency(
+            pair.Key / 1_000_000,
+            pair.Key % 1_000_000,
+            pair.Value)).ToArray();
     }
 
     private Dictionary<int, double> ReadCounterArray(nint counter)

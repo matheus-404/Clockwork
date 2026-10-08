@@ -43,7 +43,6 @@ public sealed class PresentMonMonitor : IDisposable
     private readonly Dictionary<uint, string> _deviceNames = new();
     private readonly List<uint> _graphicsDeviceIds = new();
     private readonly Dictionary<uint, PresentMonNative.PM_DEVICE_TYPE> _deviceTypes = new();
-    private readonly Dictionary<uint, PresentMonNative.PM_DEVICE_VENDOR> _deviceVendors = new();
     private uint _systemDeviceId;
     private bool _hasSystemDevice;
     private uint _independentDeviceId;
@@ -241,27 +240,26 @@ public sealed class PresentMonMonitor : IDisposable
         lock (_sync)
         {
             var gpu = plan.HasGpuMetric ? ChooseActiveGpu() : null;
-            var gpuFallback = plan.HasGpuMetric ? ChooseGpuFallback(gpu) : null;
             (double? low1, double? low01) = (plan.Low1Fps || plan.Low01Fps)
                 ? CalculateLowFpsPair()
                 : (null, null);
 
             return new PresentMonSnapshot(
-                Array.Empty<double>(),
+                Array.Empty<CpuCoreFrequency>(),
                 plan.CpuUsage ? GetScalar(CpuUsageKey) : null,
-                plan.GpuTemperature ? FirstGpuValue(gpu, gpuFallback, static x => x.TemperatureC) : null,
-                plan.GpuCoreClock ? FirstGpuValue(gpu, gpuFallback, static x => x.CoreClockMHz) : null,
-                plan.GpuMemoryClock ? FirstGpuValue(gpu, gpuFallback, static x => x.MemoryClockMHz) : null,
-                plan.GpuVramUsage ? FirstGpuValue(gpu, gpuFallback, static x => x.VramUsedMb) : null,
-                plan.VramUsagePercent ? FirstGpuValue(gpu, gpuFallback, static x => x.VramUsagePercent) : null,
-                plan.GpuPower ? FirstGpuValue(gpu, gpuFallback, static x => x.PowerW) : null,
-                plan.GpuUsage ? FirstGpuValue(gpu, gpuFallback, static x => x.UsagePercent) : null,
-                plan.GpuRenderCompute ? FirstGpuValue(gpu, gpuFallback, static x => x.RenderComputeUsagePercent) : null,
-                plan.GpuPowerLimited ? FirstGpuValue(gpu, gpuFallback, static x => x.PowerLimited) : null,
-                plan.GpuTemperatureLimited ? FirstGpuValue(gpu, gpuFallback, static x => x.TemperatureLimited) : null,
-                plan.GpuCurrentLimited ? FirstGpuValue(gpu, gpuFallback, static x => x.CurrentLimited) : null,
-                plan.GpuVoltageLimited ? FirstGpuValue(gpu, gpuFallback, static x => x.VoltageLimited) : null,
-                plan.GpuUtilizationLimited ? FirstGpuValue(gpu, gpuFallback, static x => x.UtilizationLimited) : null,
+                plan.GpuTemperature ? gpu?.TemperatureC : null,
+                plan.GpuCoreClock ? gpu?.CoreClockMHz : null,
+                plan.GpuMemoryClock ? gpu?.MemoryClockMHz : null,
+                plan.GpuVramUsage ? gpu?.VramUsedMb : null,
+                plan.VramUsagePercent ? gpu?.VramUsagePercent : null,
+                plan.GpuPower ? gpu?.PowerW : null,
+                plan.GpuUsage ? gpu?.UsagePercent : null,
+                plan.GpuRenderCompute ? gpu?.RenderComputeUsagePercent : null,
+                plan.GpuPowerLimited ? gpu?.PowerLimited : null,
+                plan.GpuTemperatureLimited ? gpu?.TemperatureLimited : null,
+                plan.GpuCurrentLimited ? gpu?.CurrentLimited : null,
+                plan.GpuVoltageLimited ? gpu?.VoltageLimited : null,
+                plan.GpuUtilizationLimited ? gpu?.UtilizationLimited : null,
                 plan.Fps ? CalculateFps() : null,
                 plan.AvgFps ? CalculateAverageFps() : null,
                 plan.Low1Fps ? low1 : null,
@@ -396,7 +394,6 @@ public sealed class PresentMonMonitor : IDisposable
         _graphicsDeviceIds.Clear();
         _deviceTypes.Clear();
         _deviceNames.Clear();
-        _deviceVendors.Clear();
         _systemDeviceId = 0;
         _hasSystemDevice = false;
         _independentDeviceId = 0;
@@ -405,7 +402,6 @@ public sealed class PresentMonMonitor : IDisposable
         foreach (var device in EnumerateObjects<PresentMonNative.PM_INTROSPECTION_DEVICE>(root.pDevices))
         {
             _deviceTypes[device.id] = device.type;
-            _deviceVendors[device.id] = device.vendor;
             _deviceNames[device.id] = ReadIntrospectionString(device.pName) ?? "<unnamed>";
 
             if (device.type == PresentMonNative.PM_DEVICE_TYPE.SYSTEM)
@@ -981,30 +977,8 @@ public sealed class PresentMonMonitor : IDisposable
             .FirstOrDefault();
     }
 
-    private GpuSample? ChooseGpuFallback(GpuSample? primary)
-    {
-        if (primary is null)
-            return null;
-
-        _deviceVendors.TryGetValue(primary.DeviceId, out var primaryVendor);
-
-        return _gpuSamples.Values
-            .Where(x => x.DeviceId != primary.DeviceId)
-            .Where(x => !IsSystemDevice(x.DeviceId))
-            .OrderByDescending(x => _deviceVendors.TryGetValue(x.DeviceId, out var vendor) && vendor == primaryVendor)
-            .ThenByDescending(x => IsGraphicsDevice(x))
-            .ThenByDescending(x => x.HasUsefulData ? 1 : 0)
-            .FirstOrDefault();
-    }
-
-    private static double? FirstGpuValue(GpuSample? primary, GpuSample? fallback, Func<GpuSample, double?> selector) =>
-        primary is not null ? selector(primary) ?? (fallback is not null ? selector(fallback) : null) : (fallback is not null ? selector(fallback) : null);
-
     private bool IsGraphicsDevice(GpuSample sample) =>
         _deviceTypes.TryGetValue(sample.DeviceId, out var type) && type == PresentMonNative.PM_DEVICE_TYPE.GRAPHICS_ADAPTER;
-
-    private bool IsSystemDevice(uint deviceId) =>
-        _deviceTypes.TryGetValue(deviceId, out var type) && type == PresentMonNative.PM_DEVICE_TYPE.SYSTEM;
 
     private void AddFrameTime(double frameTimeMs)
     {
@@ -1099,26 +1073,28 @@ public sealed class PresentMonMonitor : IDisposable
         Array.Sort(_lowFpsScratch, 0, _frameCount);
 
         return (
-            LowFromTimePercentile(0.01),
-            LowFromTimePercentile(0.001));
+            LowFromSlowestFrames(0.01),
+            LowFromSlowestFrames(0.001));
     }
 
-    private double? LowFromTimePercentile(double fraction)
+    private double? LowFromSlowestFrames(double fraction)
     {
-        var targetTimeMs = _frameSumMs * fraction;
-        var accumulatedTimeMs = 0.0;
+        if (_frameCount == 0 || !double.IsFinite(fraction) || fraction <= 0)
+            return null;
 
-        for (var i = _frameCount - 1; i >= 0; i--)
-        {
-            accumulatedTimeMs += _lowFpsScratch[i];
-            if (accumulatedTimeMs >= targetTimeMs)
-            {
-                var frameTimeMs = _lowFpsScratch[i];
-                return frameTimeMs > 0 ? 1000.0 / frameTimeMs : null;
-            }
-        }
+        // Don't turn a percentile into a single-frame outlier when the history is too short
+        // to contain even one frame in that percentile.
+        var slowFrameCount = (int)Math.Floor(_frameCount * fraction);
+        if (slowFrameCount == 0)
+            return null;
+        var totalFrameTimeMs = 0.0;
+        for (var i = _frameCount - slowFrameCount; i < _frameCount; i++)
+            totalFrameTimeMs += _lowFpsScratch[i];
 
-        return null;
+        var averageFrameTimeMs = totalFrameTimeMs / slowFrameCount;
+        return averageFrameTimeMs > 0 && double.IsFinite(averageFrameTimeMs)
+            ? 1000.0 / averageFrameTimeMs
+            : null;
     }
 
     private double? CalculateFrameTime()
@@ -1325,7 +1301,7 @@ public sealed record PresentMonFastFrameSnapshot(
     double? AllInputToPhotonLatencyMs);
 
 public sealed record PresentMonSnapshot(
-    IReadOnlyList<double> CpuCoreFrequenciesMHz,
+    IReadOnlyList<CpuCoreFrequency> CpuCoreFrequenciesMHz,
     double? CpuUsagePercent,
     double? GpuTemperatureC,
     double? GpuCoreClockMHz,

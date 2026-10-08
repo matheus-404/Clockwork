@@ -50,6 +50,10 @@ public sealed class PresentMonUpdateService : IDisposable
         {
             release = await GetLatestReleaseAsync(cancellationToken).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             return installedAvailable
@@ -148,6 +152,10 @@ public sealed class PresentMonUpdateService : IDisposable
             return installed is null
                 ? PresentMonStartupResult.Installed(updated)
                 : PresentMonStartupResult.Updated(updated);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -267,6 +275,10 @@ public sealed class PresentMonUpdateService : IDisposable
                     if (match.Success)
                         return match.Groups[1].Value;
                 }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch
             {

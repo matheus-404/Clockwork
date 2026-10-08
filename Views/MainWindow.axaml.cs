@@ -200,9 +200,18 @@ public partial class MainWindow : Window
         Canvas.SetTop(PreviewOverlay, Math.Max(0, y));
     }
 
+    private void OnOverlayPreviewCanvasSizeChanged(object? sender, SizeChangedEventArgs e) =>
+        UpdateOverlayPreviewPosition();
+
     private void OnOverlayPreviewPointerPressed(object? sender, PointerPressedEventArgs e)
     {
         if (ViewModel is not { } vm || e.Source is not Visual sourceVisual || OverlayPreviewCanvas is null || PreviewOverlay is null)
+            return;
+
+        // The preview may have been hidden while the window first laid out. Recompute before
+        // reading Canvas.Left/Top so an unset attached value cannot poison the drag offset.
+        UpdateOverlayPreviewPosition();
+        if (OverlayPreviewCanvas.Bounds.Width <= 0 || OverlayPreviewCanvas.Bounds.Height <= 0)
             return;
 
         var point = e.GetPosition(OverlayPreviewCanvas);
@@ -211,6 +220,8 @@ public partial class MainWindow : Window
         var previewHeight = PreviewOverlay.Height * scale;
         var left = Canvas.GetLeft(PreviewOverlay);
         var top = Canvas.GetTop(PreviewOverlay);
+        if (!double.IsFinite(left)) left = 0;
+        if (!double.IsFinite(top)) top = 0;
 
         if (sourceVisual == PreviewOverlay || PreviewOverlay.IsVisualAncestorOf(sourceVisual))
             _dragOffset = new Point(point.X - left, point.Y - top);
