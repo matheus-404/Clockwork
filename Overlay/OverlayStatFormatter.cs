@@ -18,10 +18,6 @@ internal static class OverlayStatFormatter
     {
         string Num(double? value, string format, string unit) =>
             value is { } v && double.IsFinite(v) ? v.ToString(format) + unit : NotAvailable;
-        string Cores(IReadOnlyList<CpuCoreFrequency> values) => values.Count > 0
-            ? string.Join(Environment.NewLine, values.Select(core =>
-                $"CPU {FormatCoreId(core)}: {core.FrequencyMHz:0} MHz"))
-            : NotAvailable;
         string Flag(double? value) =>
             value is { } v && double.IsFinite(v) ? (v != 0 ? "Yes" : "No") : NotAvailable;
         string PresentMonValue(double? value, PresentMonNative.PM_METRIC metric, string format, string unit) =>
@@ -41,7 +37,6 @@ internal static class OverlayStatFormatter
             "Displayed FPS" => Num(snapshot.DisplayedFps, "0", ""),
             "Application FPS" => Num(snapshot.ApplicationFps, "0", ""),
 
-            "CPU Frequency" => Cores(snapshot.CpuCoreFrequenciesMHz),
             "CPU Usage" => Num(snapshot.CpuUsagePercent, "0", "%"),
             "CPU Busy" => Num(snapshot.CpuBusyMs, "0.0", " ms"),
             "CPU Wait" => Num(snapshot.CpuWaitMs, "0.0", " ms"),
@@ -82,9 +77,6 @@ internal static class OverlayStatFormatter
             _ => NotAvailable,
         };
     }
-
-    private static string FormatCoreId(CpuCoreFrequency core) =>
-        core.Node == 0 ? core.Processor.ToString() : $"{core.Node},{core.Processor}";
 
     private static string FormatPlaytime(TimeSpan elapsed)
     {

@@ -9,7 +9,7 @@ using Clockwork.Views;
 namespace Clockwork.Overlay;
 
 /// <summary>
-/// Tracks the foreground game and feeds the overlay. All process enumeration and PresentMon/PDH
+/// Tracks the foreground game and feeds the overlay. All process enumeration and PresentMon
 /// collection happens on background workers; the UI dispatcher is used only for visual updates.
 /// </summary>
 public sealed class OverlayController : IDisposable
@@ -29,7 +29,6 @@ public sealed class OverlayController : IDisposable
     private readonly MainWindowViewModel _settings;
     private readonly OverlayViewModel _vm = new();
     private readonly PresentMonMonitor _presentMon = new();
-    private readonly ProcessorFrequencyMonitor _processorFrequency = new();
     private readonly Win32.ProcessSnapshotTable _processSnapshots = new();
     private readonly CancellationTokenSource _cts = new();
     private readonly ManualResetEventSlim _fastWake = new(false);
@@ -316,12 +315,6 @@ public sealed class OverlayController : IDisposable
             snapshot = _presentMon.GetSnapshot(enabled.MetricPlan);
         }
 
-        if (enabled.CpuFrequencyEnabled)
-        {
-            var frequencies = _processorFrequency.Sample();
-            snapshot = snapshot with { CpuCoreFrequenciesMHz = frequencies };
-        }
-
         var ramSample = enabled.Stats.Contains("RAM Usage") || enabled.Stats.Contains("RAM Usage (%)")
             ? Win32.GetRamUsage()
             : null;
@@ -484,7 +477,6 @@ public sealed class OverlayController : IDisposable
             stats,
             stats.Contains("Session Playtime"),
             stats.Contains("System Time"),
-            stats.Contains("CPU Frequency"),
             BuildFastPlan(stats),
             BuildMetricPlan(stats));
     }
@@ -660,9 +652,7 @@ public sealed class OverlayController : IDisposable
                 continue;
             }
 
-            OverlayLine line = name == "CPU Frequency"
-                ? new PerCoreOverlayLine(name)
-                : new OverlayLine(name);
+            OverlayLine line = new(name);
             lines.Insert(i, line);
             _lineByLabel[name] = line;
         }
@@ -820,7 +810,6 @@ public sealed class OverlayController : IDisposable
         EndSession();
         lock (_presentMonSync)
             _presentMon.Dispose();
-        _processorFrequency.Dispose();
         _processSnapshots.Dispose();
         _fastWake.Dispose();
         _cts.Dispose();
@@ -835,7 +824,6 @@ public sealed class OverlayController : IDisposable
         public HashSet<string> Stats { get; }
         public bool PlaytimeEnabled { get; }
         public bool SystemTimeEnabled { get; }
-        public bool CpuFrequencyEnabled { get; }
         public PresentMonFastFramePlan FastPlan { get; }
         public PresentMonMetricPlan MetricPlan { get; }
 
@@ -844,7 +832,6 @@ public sealed class OverlayController : IDisposable
             HashSet<string> stats,
             bool playtimeEnabled,
             bool systemTimeEnabled,
-            bool cpuFrequencyEnabled,
             PresentMonFastFramePlan fastPlan,
             PresentMonMetricPlan metricPlan)
         {
@@ -852,7 +839,6 @@ public sealed class OverlayController : IDisposable
             Stats = stats;
             PlaytimeEnabled = playtimeEnabled;
             SystemTimeEnabled = systemTimeEnabled;
-            CpuFrequencyEnabled = cpuFrequencyEnabled;
             FastPlan = fastPlan;
             MetricPlan = metricPlan;
         }

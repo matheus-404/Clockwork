@@ -14,7 +14,6 @@
         Focusable="False"
         SizeToContent="WidthAndHeight">
 
-
     <Window.Styles>
         <!-- Transparent-background mode: use vivid, high-chroma text and a black halo. -->
         <Style Selector="Border.overlayRoot TextBlock.overlayLabel">
@@ -46,70 +45,44 @@
         <Border x:Name="OverlayBackgroundBorder"
                 Classes="overlayRoot"
                 Background="#F0000000"
-                Padding="5,4"
+                Padding="4,3"
                 CornerRadius="1">
             <ItemsControl ItemsSource="{Binding Lines}">
-            <ItemsControl.ItemsPanel>
-                <ItemsPanelTemplate>
-                    <StackPanel />
-                </ItemsPanelTemplate>
-            </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
 
-            <ItemsControl.DataTemplates>
-                <DataTemplate x:DataType="vm:PerCoreOverlayLine">
-                    <Grid RowDefinitions="Auto,Auto">
-                        <TextBlock Grid.Row="0"
-                                   Text="{Binding Label}"
-                                   Classes="overlayLabel"
-                                   FontSize="12"
-                                   FontWeight="SemiBold"
-                                   LineHeight="16"
-                                   VerticalAlignment="Top"
-                                   FontFamily="Consolas,Cascadia Mono,monospace"
-                                   TextWrapping="NoWrap" />
+                <ItemsControl.DataTemplates>
+                    <DataTemplate x:DataType="vm:OverlayLine">
+                        <Grid ColumnDefinitions="Auto,Auto" MinHeight="16">
+                            <TextBlock Grid.Column="0"
+                                       Text="{Binding Label}"
+                                       Classes="overlayLabel"
+                                       FontSize="12"
+                                       FontWeight="SemiBold"
+                                       LineHeight="16"
+                                       VerticalAlignment="Center"
+                                       FontFamily="Consolas,Cascadia Mono,monospace"
+                                       TextWrapping="NoWrap" />
 
-                        <TextBlock Grid.Row="1"
-                                   Text="{Binding Value}"
-                                   Classes="overlayValue"
-                                   FontSize="12"
-                                   FontWeight="SemiBold"
-                                   LineHeight="16"
-                                   VerticalAlignment="Top"
-                                   HorizontalAlignment="Left"
-                                   TextAlignment="Left"
-                                   Margin="0,1,0,0"
-                                   FontFamily="Consolas,Cascadia Mono,monospace"
-                                   TextWrapping="NoWrap" />
-                    </Grid>
-                </DataTemplate>
-
-                <DataTemplate x:DataType="vm:OverlayLine">
-                    <Grid ColumnDefinitions="Auto,Auto" MinHeight="17">
-                        <TextBlock Grid.Column="0"
-                                   Text="{Binding Label}"
-                                   Classes="overlayLabel"
-                                   FontSize="12"
-                                   FontWeight="SemiBold"
-                                   LineHeight="16"
-                                   VerticalAlignment="Center"
-                                   FontFamily="Consolas,Cascadia Mono,monospace"
-                                   TextWrapping="NoWrap" />
-
-                        <TextBlock Grid.Column="1"
-                                   Text="{Binding Value}"
-                                   Classes="overlayValue"
-                                   FontSize="12"
-                                   FontWeight="SemiBold"
-                                   LineHeight="16"
-                                   VerticalAlignment="Center"
-                                   HorizontalAlignment="Left"
-                                   TextAlignment="Left"
-                                   Margin="10,0,0,0"
-                                   FontFamily="Consolas,Cascadia Mono,monospace"
-                                   TextWrapping="NoWrap" />
-                    </Grid>
-                </DataTemplate>
-            </ItemsControl.DataTemplates>
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding Value}"
+                                       Classes="overlayValue"
+                                       FontSize="12"
+                                       FontWeight="SemiBold"
+                                       LineHeight="16"
+                                       VerticalAlignment="Center"
+                                       HorizontalAlignment="Left"
+                                       TextAlignment="Left"
+                                       MinWidth="48"
+                                       Margin="6,0,0,0"
+                                       FontFamily="Consolas,Cascadia Mono,monospace"
+                                       TextWrapping="NoWrap" />
+                        </Grid>
+                    </DataTemplate>
+                </ItemsControl.DataTemplates>
             </ItemsControl>
         </Border>
     </LayoutTransformControl>

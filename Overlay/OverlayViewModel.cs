@@ -14,8 +14,3 @@ public class OverlayLine(string label) : ViewModelBase
     public string Label { get; } = label;
     public string Value { get => _value; set => SetField(ref _value, value); }
 }
-
-
-public sealed class PerCoreOverlayLine(string label) : OverlayLine(label)
-{
-}

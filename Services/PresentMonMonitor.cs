@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 namespace Clockwork.Services;
 
 /// <summary>
-/// PresentMon Service client used by Clockwork for FPS, CPU and GPU telemetry.
+/// PresentMon Service client used by Clockwork for FPS, CPU, and GPU telemetry.
 /// RAM usage remains in Win32 because it is a Windows system-memory statistic rather than a
 /// PresentMon hardware metric.
 /// </summary>
@@ -15,6 +15,8 @@ public sealed class PresentMonMonitor : IDisposable
     private const uint TelemetryPollingPeriodMs = 100;
     private const uint EtwFlushPeriodMs = 16;
     private const double DynamicWindowMs = 500.0;
+
+    private static readonly long InputLatencyExpiryTicks = (long)(Stopwatch.Frequency * 1.5);
 
     private readonly double[] _frameTimesMs = new double[MaxFrames];
     private readonly double[] _lowFpsScratch = new double[MaxFrames];
@@ -56,6 +58,7 @@ public sealed class PresentMonMonitor : IDisposable
     private static readonly long StaleAfterEmptyTicks = Stopwatch.Frequency * 2;
     private long _emptySinceTimestamp;
     private readonly Dictionary<string, double> _frameValues = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, long> _inputLatencyTimestamps = new(StringComparer.Ordinal);
 
     public bool IsAvailable => _session != 0 && _api is not null;
     public bool IsTracking => _trackedPid != 0;
@@ -167,6 +170,7 @@ public sealed class PresentMonMonitor : IDisposable
             _processValues.Clear();
             _emptySinceTimestamp = 0;
             _frameValues.Clear();
+            _inputLatencyTimestamps.Clear();
             ResetAverageFpsMeasurement();
         }
     }
@@ -245,7 +249,6 @@ public sealed class PresentMonMonitor : IDisposable
                 : (null, null);
 
             return new PresentMonSnapshot(
-                Array.Empty<CpuCoreFrequency>(),
                 plan.CpuUsage ? GetScalar(CpuUsageKey) : null,
                 plan.GpuTemperature ? gpu?.TemperatureC : null,
                 plan.GpuCoreClock ? gpu?.CoreClockMHz : null,
@@ -309,6 +312,9 @@ public sealed class PresentMonMonitor : IDisposable
     private const string BetweenDisplayChangeKey = "between-display-change";
     private const string ClickToPhotonLatencyKey = "click-to-photon-latency";
     private const string AllInputToPhotonLatencyKey = "all-input-to-photon-latency";
+
+    private static bool IsInputLatencyKey(string key) =>
+        key is ClickToPhotonLatencyKey or AllInputToPhotonLatencyKey;
 
     private bool EnsureSession()
     {
@@ -728,7 +734,19 @@ public sealed class PresentMonMonitor : IDisposable
                             continue;
 
                         var converted = ConvertToDisplayUnit(value.Value, binding.Unit);
-                        _frameValues[binding.Key] = converted;
+
+                        if (IsInputLatencyKey(binding.Key))
+                        {
+                            if (converted > 0)
+                            {
+                                _frameValues[binding.Key] = converted;
+                                _inputLatencyTimestamps[binding.Key] = Stopwatch.GetTimestamp();
+                            }
+                        }
+                        else
+                        {
+                            _frameValues[binding.Key] = converted;
+                        }
 
                         if (binding.Key == BetweenPresentsKey && converted > 0 && converted < 10000)
                         {
@@ -959,7 +977,22 @@ public sealed class PresentMonMonitor : IDisposable
         return null;
     }
 
-    private double? GetMetric(string key) => _frameValues.TryGetValue(key, out var value) && double.IsFinite(value) ? value : null;
+    private double? GetMetric(string key)
+    {
+        if (!_frameValues.TryGetValue(key, out var value) || !double.IsFinite(value))
+            return null;
+
+        if (IsInputLatencyKey(key))
+        {
+            if (!_inputLatencyTimestamps.TryGetValue(key, out var timestamp))
+                return null;
+
+            if (Stopwatch.GetTimestamp() - timestamp > InputLatencyExpiryTicks)
+                return null;
+        }
+
+        return value;
+    }
 
     private GpuSample? ChooseActiveGpu()
     {
@@ -1063,12 +1096,7 @@ public sealed class PresentMonMonitor : IDisposable
 
         var index = (_frameHead - _frameCount + MaxFrames) % MaxFrames;
         for (var i = 0; i < _frameCount; i++)
-        {
             _lowFpsScratch[i] = _frameTimesMs[index];
-            index++;
-            if (index == MaxFrames)
-                index = 0;
-        }
 
         Array.Sort(_lowFpsScratch, 0, _frameCount);
 
@@ -1082,8 +1110,6 @@ public sealed class PresentMonMonitor : IDisposable
         if (_frameCount == 0 || !double.IsFinite(fraction) || fraction <= 0)
             return null;
 
-        // Don't turn a percentile into a single-frame outlier when the history is too short
-        // to contain even one frame in that percentile.
         var slowFrameCount = (int)Math.Floor(_frameCount * fraction);
         if (slowFrameCount == 0)
             return null;
@@ -1135,6 +1161,7 @@ public sealed class PresentMonMonitor : IDisposable
             _frameBindings.Clear();
             _processValues.Clear();
             _frameValues.Clear();
+            _inputLatencyTimestamps.Clear();
             _gpuSamples.Clear();
         }
 
@@ -1301,7 +1328,6 @@ public sealed record PresentMonFastFrameSnapshot(
     double? AllInputToPhotonLatencyMs);
 
 public sealed record PresentMonSnapshot(
-    IReadOnlyList<CpuCoreFrequency> CpuCoreFrequenciesMHz,
     double? CpuUsagePercent,
     double? GpuTemperatureC,
     double? GpuCoreClockMHz,
