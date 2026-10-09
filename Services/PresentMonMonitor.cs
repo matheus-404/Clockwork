@@ -582,7 +582,7 @@ public sealed class PresentMonMonitor : IDisposable
         if (plan.CpuBusy) AddFrameMetric(elements, PresentMonNative.PM_METRIC.CPU_BUSY, CpuBusyKey);
         if (plan.CpuWait) AddFrameMetric(elements, PresentMonNative.PM_METRIC.CPU_WAIT, CpuWaitKey);
         if (plan.GpuTime) AddFrameMetric(elements, PresentMonNative.PM_METRIC.GPU_TIME, GpuTimeKey);
-        if (plan.GpuBusy) AddFrameMetric(elements, PresentMonNative.PM_METRIC.GPU_BUSY, GpuBusyKey);
+        if (plan.GpuBusy) AddFrameMetric(elements, PresentMonNative.PM_METRIC.GPU_BUSY, CpuBusyKey);
         if (plan.GpuWait) AddFrameMetric(elements, PresentMonNative.PM_METRIC.GPU_WAIT, GpuWaitKey);
         if (plan.DroppedFrames) AddFrameMetric(elements, PresentMonNative.PM_METRIC.DROPPED_FRAMES, DroppedFramesKey);
         if (plan.GpuLatency) AddFrameMetric(elements, PresentMonNative.PM_METRIC.GPU_LATENCY, GpuLatencyKey);
@@ -1094,9 +1094,9 @@ public sealed class PresentMonMonitor : IDisposable
         if (_frameCount == 0 || _frameSumMs <= 0)
             return (null, null);
 
-        var index = (_frameHead - _frameCount + MaxFrames) % MaxFrames;
+        var startIndex = (_frameHead - _frameCount + MaxFrames) % MaxFrames;
         for (var i = 0; i < _frameCount; i++)
-            _lowFpsScratch[i] = _frameTimesMs[index];
+            _lowFpsScratch[i] = _frameTimesMs[(startIndex + i) % MaxFrames];
 
         Array.Sort(_lowFpsScratch, 0, _frameCount);
 
