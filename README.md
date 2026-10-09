@@ -14,7 +14,7 @@ The name **Clockwork** is inspired by *...Like Clockwork* by **Queens of the Sto
 - Configurable in-game overlay with persistent position, scale, background, and opacity settings.
 - Frame-rate monitoring including FPS, average FPS, 1% low FPS, 0.1% low FPS, and frame time.
 - PresentMon-backed GPU, frame-pacing, and latency telemetry.
-- Per-logical-processor CPU frequency monitoring through Windows Performance Data Helper (PDH).
+- A focused set of CPU workload metrics, without kernel-level CPU hardware monitoring drivers.
 - RAM usage and game/process working-set monitoring.
 - Session playtime and system clock information.
 - Foreground-first detection of fullscreen and borderless games, with background sessions retained when switching between applications. Windowed-game tracking is available as an opt-in setting.
@@ -40,7 +40,7 @@ The overlay is intentionally separate from the settings UI, so the monitoring di
 
 ## 📊 Available Statistics
 
-Clockwork currently exposes **43 configurable statistics/options** across six metric categories plus overlay settings.
+Clockwork currently exposes **42 configurable statistics/options** across six metric categories plus overlay settings.
 
 ### Performance
 
@@ -60,13 +60,12 @@ Clockwork currently exposes **43 configurable statistics/options** across six me
 
 | Statistic | Description |
 |---|---|
-| **CPU Frequency** | Frequency for each logical processor, reported individually. |
 | **CPU Usage** | CPU utilization percentage. |
 | **CPU Busy** | CPU busy time associated with the tracked frame/telemetry data. |
 | **CPU Wait** | CPU wait time associated with the tracked frame/telemetry data. |
 | **CPU Frame Time** | CPU-side frame time in milliseconds. |
 
-CPU frequency is collected separately from the PresentMon query using Windows PDH, while the other CPU telemetry is PresentMon-backed.
+CPU frequency, temperature, voltage, and power readings are intentionally limited. Clockwork avoids kernel-level hardware-monitoring drivers such as PawnIO to keep its access footprint smaller. Without such a driver, there is no reliable user-mode method for reporting accurate frequency readings for every logical processor; the Windows PDH counters previously used by Clockwork did not provide a dependable per-processor clock reading. CPU telemetry is therefore focused on workload metrics rather than low-level hardware sensors.
 
 ### GPU
 
@@ -112,7 +111,7 @@ Actual metric availability depends on the installed PresentMon version, graphics
 | **Click-to-Photon Latency** | Input click-to-photon latency when supported by the PresentMon data source. |
 | **All Input-to-Photon Latency** | Input-to-photon latency covering all supported input events. |
 
-Latency and other high-frequency frame metrics use a dedicated fast telemetry path so they can update frequently without forcing the entire application into the highest polling rate all the time.
+Latency and other high-frequency frame metrics use a dedicated fast telemetry path so they can update frequently without forcing the entire application into the highest polling rate all the time. Click-to-Photon and All Input-to-Photon values expire after 1.5 seconds without a fresh PresentMon sample, so inactivity or telemetry blocked by anti-cheat isolation does not leave a frozen value on screen.
 
 ### More
 
@@ -186,8 +185,10 @@ Instead:
 - Process discovery uses a system process snapshot.
 - Window information is retrieved through normal Win32 window APIs.
 - Performance telemetry is obtained primarily through PresentMon.
-- Per-CPU frequency is obtained from the Windows PDH subsystem.
+- CPU hardware telemetry avoids kernel-level monitoring drivers; Clockwork does not use PawnIO.
 - The overlay itself is a separate top-level window configured with click-through/no-activate/tool-window extended styles.
+
+CPU hardware sensor coverage is intentionally limited. Clockwork avoids kernel-level drivers such as PawnIO; without a driver providing direct hardware access, accurate per-logical-processor CPU frequency readings are not reliably available through the user-mode interfaces used here. CPU temperature, voltage, and power are also not presented as dependable metrics without that kind of hardware access.
 
 ### Important disclaimer
 
@@ -396,7 +397,6 @@ Telemetry collection occurs on worker tasks, with shared telemetry bindings and 
 | Text shaping | HarfBuzz |
 | Platform | Windows x64 |
 | GPU/frame telemetry | PresentMon |
-| CPU frequency telemetry | Windows PDH |
 | Native interop | Win32 / P/Invoke |
 | Planned application packaging | Velopack |
 | Planned release distribution | GitHub Releases + GitHub Actions |
@@ -432,7 +432,6 @@ Clockwork/
 │   ├── PresentMonMonitor.cs
 │   ├── PresentMonNative.cs
 │   ├── PresentMonUpdateService.cs
-│   ├── ProcessorFrequencyMonitor.cs
 │   ├── SettingsService.cs
 │   └── StartupMessageBox.cs
 │
@@ -467,10 +466,6 @@ Owns the PresentMon API session, introspection, dynamic/frame queries, telemetry
 #### `PresentMonNative`
 
 Contains the native PresentMon API bindings, structures, delegates, dynamic library loading logic, and compatibility search paths for `PresentMonAPI2.dll`.
-
-#### `ProcessorFrequencyMonitor`
-
-Uses Windows PDH to collect per-logical-processor frequency data independently of PresentMon.
 
 #### `PresentMonUpdateService`
 
