@@ -100,6 +100,16 @@ public sealed class PresentMonMonitor : IDisposable
 
     public string? LastError => _lastError;
 
+    private void SetError(string? error)
+    {
+        if (string.Equals(_lastError, error, StringComparison.Ordinal))
+            return;
+
+        _lastError = error;
+        if (!string.IsNullOrWhiteSpace(error))
+            TelemetryDiagnostics.Write(error);
+    }
+
     /// <summary>Makes the next update retry connecting right away instead of waiting out a backoff.</summary>
     public void RequestImmediateRetry()
     {
@@ -200,7 +210,7 @@ public sealed class PresentMonMonitor : IDisposable
         }
         catch (Exception ex)
         {
-            _lastError = $"PresentMon telemetry error: {ex.Message}";
+            SetError($"PresentMon telemetry error: {ex.Message}");
             FreeQueries();
             _queriesDirty = true;
             ScheduleQueryRetry();
@@ -218,7 +228,7 @@ public sealed class PresentMonMonitor : IDisposable
         }
         catch (Exception ex)
         {
-            _lastError = $"PresentMon fast frame telemetry error: {ex.Message}";
+            SetError($"PresentMon fast frame telemetry error: {ex.Message}");
         }
     }
 
@@ -428,7 +438,7 @@ public sealed class PresentMonMonitor : IDisposable
             if (status != PresentMonNative.PM_STATUS.SUCCESS &&
                 status != PresentMonNative.PM_STATUS.ALREADY_TRACKING_PROCESS)
             {
-                _lastError = $"PresentMon could not track PID {pid}: {PresentMonNative.StatusText(status)}";
+                SetError($"PresentMon could not track PID {pid}: {PresentMonNative.StatusText(status)}");
                 ScheduleConnectRetry();
                 return;
             }
@@ -443,7 +453,7 @@ public sealed class PresentMonMonitor : IDisposable
         }
         catch (Exception ex)
         {
-            _lastError = $"PresentMon initialization error: {ex.Message}";
+            SetError($"PresentMon initialization error: {ex.Message}");
             DropSession();
             ScheduleConnectRetry();
         }
@@ -456,21 +466,21 @@ public sealed class PresentMonMonitor : IDisposable
 
         if (!PresentMonNative.Api.TryLoad(out var api, out var loadError) || api is null)
         {
-            _lastError = loadError ?? "Failed to load PresentMon API.";
+            SetError(loadError ?? "Failed to load PresentMon API.");
             return false;
         }
 
         var versionStatus = api.GetApiVersion(out var version);
         if (versionStatus != PresentMonNative.PM_STATUS.SUCCESS)
         {
-            _lastError = $"PresentMon API version query failed: {PresentMonNative.StatusText(versionStatus)}";
+            SetError($"PresentMon API version query failed: {PresentMonNative.StatusText(versionStatus)}");
             api.Dispose();
             return false;
         }
 
         if (version.major != 3)
         {
-            _lastError = $"Unsupported PresentMon API version {version.major}.{version.minor}.{version.patch}. Clockwork requires API major version 3.";
+            SetError($"Unsupported PresentMon API version {version.major}.{version.minor}.{version.patch}. Clockwork requires API major version 3.");
             api.Dispose();
             return false;
         }
@@ -478,14 +488,14 @@ public sealed class PresentMonMonitor : IDisposable
         var status = api.OpenSession(out _session);
         if (status != PresentMonNative.PM_STATUS.SUCCESS)
         {
-            _lastError = $"PresentMon service session could not be opened: {PresentMonNative.StatusText(status)}";
+            SetError($"PresentMon service session could not be opened: {PresentMonNative.StatusText(status)}");
             _session = 0;
             api.Dispose();
             return false;
         }
 
         _api = api;
-        _lastError = null;
+        SetError(null);
         return true;
     }
 
@@ -548,7 +558,7 @@ public sealed class PresentMonMonitor : IDisposable
         if (++_consecutiveConnectionErrors < ConnectionErrorsBeforeReconnect)
             return false;
 
-        _lastError = $"PresentMon connection lost: {PresentMonNative.StatusText(status)}";
+        SetError($"PresentMon connection lost: {PresentMonNative.StatusText(status)}");
         DropSession();
         ScheduleConnectRetry();
         return true;
@@ -592,7 +602,7 @@ public sealed class PresentMonMonitor : IDisposable
         }
         catch (Exception ex)
         {
-            _lastError = $"PresentMon query setup error: {ex.Message}";
+            SetError($"PresentMon query setup error: {ex.Message}");
             FreeQueries();
             ScheduleQueryRetry();
         }
@@ -603,7 +613,7 @@ public sealed class PresentMonMonitor : IDisposable
         var rootStatus = api.GetIntrospectionRoot(_session, out var rootPtr);
         if (rootStatus != PresentMonNative.PM_STATUS.SUCCESS || rootPtr == 0)
         {
-            _lastError = $"PresentMon introspection failed: {PresentMonNative.StatusText(rootStatus)}";
+            SetError($"PresentMon introspection failed: {PresentMonNative.StatusText(rootStatus)}");
             return false;
         }
 
@@ -643,7 +653,7 @@ public sealed class PresentMonMonitor : IDisposable
         var status = api.RegisterDynamicQuery(_session, out var query, elements, (ulong)elements.Length, DynamicWindowMs, 0u);
         if (status != PresentMonNative.PM_STATUS.SUCCESS)
         {
-            _lastError = $"PresentMon dynamic query failed: {PresentMonNative.StatusText(status)}";
+            SetError($"PresentMon dynamic query failed: {PresentMonNative.StatusText(status)}");
             return false;
         }
 
@@ -693,7 +703,7 @@ public sealed class PresentMonMonitor : IDisposable
         var status = api.RegisterFrameQuery(_session, out var query, elements, (ulong)elements.Length, out var blobSize);
         if (status != PresentMonNative.PM_STATUS.SUCCESS)
         {
-            _lastError = $"PresentMon frame query failed: {PresentMonNative.StatusText(status)}";
+            SetError($"PresentMon frame query failed: {PresentMonNative.StatusText(status)}");
             return false;
         }
 
@@ -849,7 +859,7 @@ public sealed class PresentMonMonitor : IDisposable
         if (status != PresentMonNative.PM_STATUS.SUCCESS)
         {
             if (status != PresentMonNative.PM_STATUS.OUT_OF_RANGE)
-                _lastError = $"PresentMon telemetry query failed: {PresentMonNative.StatusText(status)}";
+                SetError($"PresentMon telemetry query failed: {PresentMonNative.StatusText(status)}");
 
             NoteStatus(status);
             return;
@@ -1444,3 +1454,4 @@ public sealed class PresentMonMonitor : IDisposable
             Get(MetricKey.GpuRenderCompute, now).HasValue;
     }
 }
+

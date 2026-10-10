@@ -21,7 +21,6 @@ public sealed class PresentMonUpdateService : IDisposable
 
     private static readonly Version MinimumSupportedVersion = new(2, 3, 1);
     private const int MaxAutoInstallReleaseMajor = 2;
-    private static readonly bool AutoUpdateWorkingInstall = false;
     private static readonly bool RequireSignedMsi = false;
     private const string ExpectedSignerName = "Intel";
 
@@ -53,9 +52,6 @@ public sealed class PresentMonUpdateService : IDisposable
     {
         var installed = GetInstalledVersion();
         var installedAvailable = installed is not null;
-
-        if (installed is not null && installed >= MinimumSupportedVersion && !AutoUpdateWorkingInstall)
-            return PresentMonStartupResult.Current(installed, installed);
 
         List<PresentMonRelease> releases;
         try
@@ -590,3 +586,4 @@ public sealed record PresentMonStartupResult(
     public static PresentMonStartupResult MissingFailed(string message) =>
         new(PresentMonStartupStatus.MissingInstallFailed, null, null, message);
 }
+

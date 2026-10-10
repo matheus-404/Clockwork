@@ -189,14 +189,15 @@ internal static class PresentMonNative
         public nuint size;
     }
 
+    // Only the fixed prefix is read. PresentMon 2.3.x ends the device record
+    // after pName, whereas later releases append pLuid; this prefix is ABI-safe
+    // across both layouts.
     [StructLayout(LayoutKind.Sequential)]
     internal struct PM_INTROSPECTION_DEVICE
     {
         public uint id;
         public PM_DEVICE_TYPE type;
         public PM_DEVICE_VENDOR vendor;
-        public IntPtr pName;
-        public IntPtr pLuid;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -221,6 +222,8 @@ internal static class PresentMonNative
         public PM_STAT stat;
     }
 
+    // This layout must exactly match PM_INTROSPECTION_METRIC in PresentMonAPI.h.
+    // In particular, it does not contain name, short-name, or description pointers.
     [StructLayout(LayoutKind.Sequential)]
     internal struct PM_INTROSPECTION_METRIC
     {
@@ -228,9 +231,6 @@ internal static class PresentMonNative
         public PM_METRIC_TYPE type;
         public PM_UNIT unit;
         public PM_UNIT preferredUnitHint;
-        public IntPtr pName;
-        public IntPtr pShortName;
-        public IntPtr pDescription;
         public IntPtr pTypeInfo;
         public IntPtr pStatInfo;
         public IntPtr pDeviceMetricInfo;
@@ -288,7 +288,6 @@ internal static class PresentMonNative
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate PM_STATUS PmFreeIntrospectionRoot(IntPtr root);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate PM_STATUS PmSetTelemetryPollingPeriod(IntPtr handle, uint reserved, uint timeMs);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate PM_STATUS PmSetEtwFlushPeriod(IntPtr handle, uint periodMs);
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate PM_STATUS PmFlushFrames(IntPtr handle, uint processId);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate PM_STATUS PmRegisterDynamicQuery(IntPtr sessionHandle, out IntPtr queryHandle, [In, Out] PM_QUERY_ELEMENT[] elements, ulong numElements, double windowSizeMs, double metricOffsetMs);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate PM_STATUS PmFreeDynamicQuery(IntPtr handle);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate PM_STATUS PmPollDynamicQuery(IntPtr handle, uint processId, IntPtr pBlob, ref uint numSwapChains);
@@ -311,7 +310,6 @@ internal static class PresentMonNative
         internal PmFreeIntrospectionRoot FreeIntrospectionRoot { get; }
         internal PmSetTelemetryPollingPeriod SetTelemetryPollingPeriod { get; }
         internal PmSetEtwFlushPeriod SetEtwFlushPeriod { get; }
-        internal PmFlushFrames FlushFrames { get; }
         internal PmRegisterDynamicQuery RegisterDynamicQuery { get; }
         internal PmFreeDynamicQuery FreeDynamicQuery { get; }
         internal PmPollDynamicQuery PollDynamicQuery { get; }
@@ -334,7 +332,6 @@ internal static class PresentMonNative
             FreeIntrospectionRoot = Load<PmFreeIntrospectionRoot>("pmFreeIntrospectionRoot");
             SetTelemetryPollingPeriod = Load<PmSetTelemetryPollingPeriod>("pmSetTelemetryPollingPeriod");
             SetEtwFlushPeriod = Load<PmSetEtwFlushPeriod>("pmSetEtwFlushPeriod");
-            FlushFrames = Load<PmFlushFrames>("pmFlushFrames");
             RegisterDynamicQuery = Load<PmRegisterDynamicQuery>("pmRegisterDynamicQuery");
             FreeDynamicQuery = Load<PmFreeDynamicQuery>("pmFreeDynamicQuery");
             PollDynamicQuery = Load<PmPollDynamicQuery>("pmPollDynamicQuery");
@@ -431,4 +428,10 @@ internal static class PresentMonNative
     }
 
     internal static string StatusText(PM_STATUS status) => status.ToString();
+
+    /// <summary>Guards the two ABI-sensitive records used during introspection.</summary>
+    internal static bool HasExpectedIntrospectionLayout() =>
+        Marshal.SizeOf<PM_INTROSPECTION_DEVICE>() == 12 &&
+        Marshal.SizeOf<PM_INTROSPECTION_METRIC>() == 40;
 }
+
