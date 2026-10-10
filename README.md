@@ -1,8 +1,6 @@
 # ⚙️ Clockwork
 
-![Platform](https://img.shields.io/badge/Platform-Windows-blue.svg) ![.NET](https://img.shields.io/badge/.NET-10.0-purple.svg) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT) ![Release](https://img.shields.io/github/v/release/matheus-404/Clockwork?include_prereleases) 
-
-**Clockwork** is a lightweight Windows system-monitoring application built with **C#**, **.NET 10**, and **Avalonia UI**. It provides an in-game telemetry overlay focused on frame-rate, frame-time, latency, CPU, GPU, RAM, and session information, while keeping the application itself simple, unobtrusive, and conscious of the additional access that hardware-monitoring tools can introduce.
+**Clockwork** is a lightweight Windows system-monitoring application built with **C#**, **.NET 10**, and **Avalonia UI**. It provides an in-game telemetry overlay focused on frame rate, frame time, latency, CPU, GPU, RAM, and session metrics, while keeping the application simple, unobtrusive, and conscious of anti-cheat integrity.
 
 The name **Clockwork** is inspired by *...Like Clockwork* by **Queens of the Stone Age**.
 
@@ -10,398 +8,217 @@ The name **Clockwork** is inspired by *...Like Clockwork* by **Queens of the Sto
 
 ## ✨ Highlights
 
-- Clean, dark desktop interface with a restrained graphite/periwinkle visual system.
-- Configurable in-game overlay with persistent position, scale, background, and opacity settings.
-- Frame-rate monitoring including FPS, average FPS, 1% low FPS, 0.1% low FPS, and frame time.
-- PresentMon-backed GPU, frame-pacing, and latency telemetry.
-- A focused set of CPU workload metrics, without kernel-level CPU hardware monitoring drivers.
-- RAM usage and game/process working-set monitoring.
-- Session playtime and system clock information.
-- Foreground-first detection of fullscreen and borderless games, with background sessions retained when switching between applications. Windowed-game tracking is available as an opt-in setting.
-- Telemetry loops are split by workload: a detection/session loop, a regular telemetry loop, and a 20 ms frame-metrics loop that runs only when high-frequency frame metrics are enabled.
-- Settings are persisted locally so selected statistics do not need to be configured again after every launch.
-- System-tray operation: closing the main window hides Clockwork to the tray; **Close Clockwork** in the tray menu performs the real shutdown.
-- Automatic PresentMon installation/update from the official PresentMon GitHub release feed.
-- SHA-256 verification of downloaded PresentMon installers when GitHub publishes a digest.
-- x64 Windows target and a self-contained deployment path suitable for Velopack packaging.
+* Clean, dark desktop interface with a restrained graphite visual system.
+* Configurable in-game overlay with persistent position, scale, background, and opacity settings.
+* Frame-rate monitoring including FPS, average FPS, 1% low FPS, 0.1% low FPS, and frame time.
+* PresentMon API v3-backed GPU, frame-pacing, and latency telemetry.
+* Workload-focused CPU telemetry avoiding kernel-level drivers (no PawnIO or custom kernel modules).
+* RAM usage and private working-set memory monitoring.
+* Session playtime and system clock information.
+* Automatic detection of foreground fullscreen and borderless games, with background session retention during Alt-Tab. Windowed games are supported via an opt-in toggle.
+* Three decoupled background loops:
+* **Detection loop** (500 ms) for foreground tracking and window state.
+* **Telemetry loop** (100 ms) for CPU, GPU, system RAM, and session timers.
+* **Fast frame loop** (16 ms ETW drain, 100 ms UI publish) active only when high-frequency frame or latency metrics are enabled.
+
+
+* Debounced local settings persistence in `%LocalAppData%\Clockwork`.
+* System tray integration: closing the window hides Clockwork to the tray; shutdown is performed via the tray menu.
+* Automatic PresentMon service detection, downloading, SHA-256 verification, and silent MSI installation.
+* Silent background application updates powered by Velopack.
+* Self-contained x64 Windows build.
 
 ---
 
 ## 🖥️ What Clockwork Does
 
-Clockwork consists of two primary parts:
+Clockwork consists of two primary components:
 
-1. **The control application** — where statistics are enabled, overlay behavior is configured, and the current configuration is saved.
-2. **The in-game overlay** — a small, click-through window that appears only when a tracked fullscreen game/application is active and visible.
+1. **The Control Window** — configure active metrics, adjust overlay position/scale/styling via a live interactive preview, and toggle windowed-game tracking.
+2. **The In-Game Overlay** — a hardware-accelerated, transparent, click-through (`WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`) overlay positioned over the game's client area.
 
-The overlay is intentionally separate from the settings UI, so the monitoring display can stay minimal while configuration remains available from the main application window. By default it is gated to fullscreen or borderless windows that cover their monitor. Enable **Include windowed games** in settings to track floating game windows.
+By default, the overlay activates only over foreground games that cover their monitor (fullscreen exclusive or borderless windowed). Floating windowed games can be tracked by enabling **Include Windowed Games** in the Overlay settings.
 
 ---
 
 ## 📊 Available Statistics
 
-Clockwork currently exposes **42 configurable statistics/options** across six metric categories plus overlay settings.
+Clockwork provides **41 configurable statistics** organized across six categories, with only **FPS** enabled by default:
 
 ### Performance
 
 | Statistic | Description |
-|---|---|
-| **FPS** | Current frame rate calculated from recent frame timings. |
-| **Avg FPS** | Average frame rate over the current session measurement. |
-| **1% Low FPS** | Time-based 1% low frame-rate value. |
-| **0.1% Low FPS** | Time-based 0.1% low frame-rate value. |
-| **Frame Time** | Average recent frame time in milliseconds. |
-| **Dropped Frames** | PresentMon drop-frame state/value when available. |
+| --- | --- |
+| **FPS** | Live frame rate calculated over the preceding 1-second window. |
+| **Avg FPS** | Running average frame rate across the active session (idle gaps >2 s excluded). |
+| **1% Low FPS** | Average frame rate of the slowest 1% of frames across the last 60 seconds. |
+| **0.1% Low FPS** | Average frame rate of the slowest 0.1% of frames across the last 60 seconds. |
+| **Frame Time** | Average recent frame time in milliseconds (1-second window). |
+| **Dropped Frames** | Indicates whether frames were dropped (`Yes`/`No`). |
 | **Presented FPS** | Presentation rate reported by PresentMon. |
 | **Displayed FPS** | Displayed frame rate reported by PresentMon. |
-| **Application FPS** | Application-level frame rate reported by PresentMon. |
+| **Application FPS** | Application-level target/render frame rate reported by PresentMon. |
 
 ### CPU
 
 | Statistic | Description |
-|---|---|
-| **CPU Usage** | CPU utilization percentage. |
-| **CPU Busy** | CPU busy time associated with the tracked frame/telemetry data. |
-| **CPU Wait** | CPU wait time associated with the tracked frame/telemetry data. |
-| **CPU Frame Time** | CPU-side frame time in milliseconds. |
+| --- | --- |
+| **CPU Usage** | Total CPU utilization percentage. |
+| **CPU Busy** | CPU execution time per frame before waiting (ms). |
+| **CPU Wait** | CPU wait time per frame (ms). |
+| **CPU Frame Time** | Total CPU-side frame processing time (ms). |
 
-CPU frequency, temperature, voltage, and power readings are intentionally limited. Clockwork avoids kernel-level hardware-monitoring drivers such as PawnIO to keep its access footprint smaller. Without such a driver, there is no reliable user-mode method for reporting accurate frequency readings for every logical processor; the Windows PDH counters previously used by Clockwork did not provide a dependable per-processor clock reading. CPU telemetry is therefore focused on workload metrics rather than low-level hardware sensors.
+*Note: Clockwork intentionally does not read CPU clock frequencies, per-core temperatures, or voltages. Doing so reliably on Windows requires kernel-level hardware-access drivers (such as PawnIO or WinRing0). Clockwork stays strictly in user space to maintain stability and anti-cheat compatibility.*
 
 ### GPU
 
 | Statistic | Description |
-|---|---|
-| **GPU Temperature** | GPU temperature in °C. |
-| **GPU Core Clock Frequency** | GPU core clock in MHz. |
-| **GPU Memory Clock Frequency** | GPU memory clock in MHz. |
-| **GPU VRAM Usage** | Used video memory in MB. |
-| **VRAM Usage (%)** | VRAM utilization percentage. |
-| **GPU Power** | GPU power consumption in watts. |
-| **GPU Usage** | GPU utilization percentage. |
-| **GPU Render/Compute Utilization** | PresentMon render/compute utilization percentage when available. |
-| **GPU Power Limited** | Whether PresentMon reports a power-limiting condition. |
-| **GPU Temperature Limited** | Whether PresentMon reports a temperature-limiting condition. |
-| **GPU Current Limited** | Whether PresentMon reports a current-limiting condition. |
-| **GPU Voltage Limited** | Whether PresentMon reports a voltage-limiting condition. |
-| **GPU Utilization Limited** | Whether PresentMon reports a utilization-limiting condition. |
-| **GPU Busy** | GPU busy time in milliseconds. |
-| **GPU Wait** | GPU wait time in milliseconds. |
-| **GPU Time** | GPU time in milliseconds. |
-
-Actual metric availability depends on the installed PresentMon version, graphics stack, device, driver, and the telemetry exposed by the system.
+| --- | --- |
+| **GPU Temperature** | GPU core temperature (°C). |
+| **GPU Core Clock Frequency** | GPU core clock frequency (MHz). |
+| **GPU Memory Clock Frequency** | GPU memory clock frequency (MHz). |
+| **GPU VRAM Usage** | Dedicated video memory used (MB). |
+| **VRAM Usage (%)** | Video memory utilization percentage. |
+| **GPU Power** | Total board/package power draw (W). |
+| **GPU Usage** | Overall GPU utilization percentage. |
+| **GPU Render/Compute Utilization** | Specialized render/compute pipeline utilization (%). |
+| **GPU Power Limited** | Indicates if GPU performance is limited by power (`Yes`/`No`). |
+| **GPU Temperature Limited** | Indicates if GPU performance is limited by thermal throttling (`Yes`/`No`). |
+| **GPU Current Limited** | Indicates if GPU performance is limited by electrical current (`Yes`/`No`). |
+| **GPU Voltage Limited** | Indicates if GPU performance is limited by voltage limits (`Yes`/`No`). |
+| **GPU Utilization Limited** | Indicates if GPU performance is limited by utilization ceilings (`Yes`/`No`). |
+| **GPU Busy** | GPU execution time per frame (ms). |
+| **GPU Wait** | GPU idle/wait time per frame (ms). |
+| **GPU Time** | Total GPU processing duration per frame (ms). |
 
 ### RAM
 
 | Statistic | Description |
-|---|---|
-| **RAM Usage** | Used system memory versus total system memory. |
-| **RAM Usage (%)** | Percentage of system memory currently in use. |
-| **Process/Game RAM Usage** | Working-set memory of the tracked foreground game/application. |
+| --- | --- |
+| **RAM Usage** | System physical memory used vs. total (`used / total GB`). |
+| **RAM Usage (%)** | System memory utilization percentage. |
+| **Process/Game RAM Usage** | Private working set of the tracked game process (GB). |
 
 ### Latency
 
 | Statistic | Description |
-|---|---|
-| **GPU Latency** | GPU latency reported by PresentMon. |
-| **Display Latency** | Display latency reported by PresentMon. |
-| **Render/Present Latency** | Render-to-present latency reported by PresentMon. |
-| **Time Until Displayed** | Time between presentation and display as exposed by PresentMon. |
-| **Between Presents** | Interval between present events. |
-| **Between Display Changes** | Interval between display changes. |
-| **Click-to-Photon Latency** | Input click-to-photon latency when supported by the PresentMon data source. |
-| **All Input-to-Photon Latency** | Input-to-photon latency covering all supported input events. |
-
-Latency and other high-frequency frame metrics use a dedicated fast telemetry path so they can update frequently without forcing the entire application into the highest polling rate all the time. Click-to-Photon and All Input-to-Photon values expire after 1.5 seconds without a fresh PresentMon sample, so inactivity or telemetry blocked by anti-cheat isolation does not leave a frozen value on screen.
+| --- | --- |
+| **GPU Latency** | Time between GPU work submission and completion (ms). |
+| **Display Latency** | Time between presentation and display scanout (ms). |
+| **Render/Present Latency** | Total latency from render start to present call (ms). |
+| **Time Until Displayed** | Duration a presented frame waits until appearing on screen (ms). |
+| **Between Presents** | Interval between consecutive present calls (ms). |
+| **Between Display Changes** | Interval between actual display refreshes (ms). |
+| **Input-to-Photon Latency** | End-to-end input-to-display latency across supported input events (ms). |
 
 ### More
 
 | Statistic | Description |
-|---|---|
-| **System Time** | Current local system time in `HH:mm` format. |
-| **Session Playtime** | Time elapsed since the current tracked game/application session began. |
+| --- | --- |
+| **System Time** | Current local clock time in `HH:mm`. |
+| **Session Playtime** | Elapsed session duration in `HH:mm:ss`. |
 
 ---
 
-## 🎯 FPS, Frame Time, and Low-FPS Calculations
+## 🎯 Calculation Methodology
 
-Clockwork keeps a bounded history of up to **20,000 frame times** in a preallocated ring buffer. This avoids continuously growing allocations while the overlay is running.
+### Frame Rate & Frame Time
 
-### FPS
+A ring buffer (`FrameStatistics`) holds up to **65,536 recent frame times** with high-resolution timestamps (`Stopwatch` ticks).
 
-Current FPS is calculated from recent frame timings covering approximately the latest one-second window:
+* **Live FPS**: Calculated as `1000.0 * frame_count / elapsed_ms` over the trailing 1,000 ms window.
+* **Frame Time**: Arithmetic mean of all frame durations within the trailing 1,000 ms window.
+* **Data Stale Timeout**: If no new frame arrives within 2,000 ms (e.g., loading screens or pause menus), calculations return `N/A` rather than holding an old value.
 
-```text
-FPS = frame_count / elapsed_time
-```
+### 1% and 0.1% Lows
 
-where elapsed time is represented by the sum of the collected frame durations.
+Lows are recalculated once per second across a **60-second rolling window**:
+
+1. All frame durations from the last 60 seconds are copied into a buffer.
+2. The samples are sorted in ascending order outside the telemetry lock.
+3. The slowest 1% and 0.1% samples are sliced and averaged.
+4. The average duration is converted to FPS: `1000.0 / average_slow_frame_time_ms`.
 
 ### Average FPS
 
-The session average uses the number of measured frames divided by the elapsed session measurement time.
-
-### 1% Low and 0.1% Low
-
-The low-FPS implementation uses a **time-based percentile approach**. Session data is preserved across foreground switches between tracked games. Frame times are sorted from worst to best, and the slowest frame times are accumulated until they account for the requested fraction of the total measured frame time. The frame time at that boundary is converted back into FPS.
-
-This is intentionally different from simply averaging the slowest 1% or 0.1% of frames. The implementation was chosen to follow the same general time-based low-FPS methodology associated with MSI Afterburner/RTSS-style reporting; it should not be interpreted as a guarantee of bit-for-bit numerical identity with another monitoring application.
+The running session average tracks total active frames divided by total active time. Frame durations >= 2,000 ms are filtered out as idle gaps (such as Alt-Tab or loading screens) so they do not artificially depress the session average.
 
 ---
 
-## 🎮 Game / Application Detection
+## 🎮 Game Detection & Session Tracking
 
-Clockwork prioritizes the active foreground window when selecting a tracked game, so focusing another eligible game switches the overlay and telemetry to that application. Sessions for games moved to the background are retained as inactive sessions during Alt-Tab, preserving their playtime and frame-stat calculations.
+Clockwork detects games without installing system hooks:
 
-By default, a candidate window must cover its monitor (fullscreen or borderless) to qualify. This boundary check helps avoid tracking productivity apps and web pages. The **Include windowed games** setting opts into tracking windowed games.
-
-The process table is collected through the native Windows `NtQuerySystemInformation(SystemProcessInformation)` process snapshot interface, and window/monitor state is obtained through Win32 APIs.
-
-The detector considers information such as:
-
-- process ID
-- executable/process name
-- executable path when available
-- main window handle
-- monitor bounds
-- fullscreen coverage
-- foreground state
-- window visibility
-- minimized state
-
-A tracked session is maintained through temporary process-table misses so that a short refresh failure does not immediately tear down an active overlay session. Background sessions remain available while another eligible game is foregrounded.
-
-Clockwork also maintains a large ignore list for applications where an in-game monitoring overlay would not be useful, such as hardware monitors, launchers, editors, terminals, media players, and other desktop tools.
+1. **Foreground Candidate Query**: Evaluates the foreground window using Win32 API calls (`GetForegroundWindow`, `GetWindowRect`, `GetClientRect`, `ClientToScreen`).
+2. **Monitor Boundary Check**: Verifies whether the client rect covers the nearest display monitor (within a 4-pixel tolerance). If **Include Windowed Games** is checked, floating windows with a minimum client size of 320 x 240 qualify as well.
+3. **Blacklist Filtering**: System components, browsers, chat tools, IDEs, media players, streaming tools, and other monitoring software are filtered out via executable name comparison.
+4. **Process Tracking**: Reads the process ID, creation time, and private working set through `NtQuerySystemInformation(SystemProcessInformation)`.
+5. **Session Persistence**: Sessions are indexed by `(Pid, CreateTime)`. When you Alt-Tab away from a game and return, session playtime and running statistics continue uninterrupted.
 
 ---
 
-## 🛡️ Anticheat-Conscious Design
+## 🛡️ Non-Invasive Anti-Cheat Design
 
-Clockwork is designed to be **non-invasive** toward the game/application being monitored.
+Clockwork does not hook DirectX/Vulkan/OpenGL runtimes and does not inject code into running games:
 
-The current architecture does **not intentionally implement game-memory inspection or code injection**. The project does not use a game-process handle to read or write process memory, does not use `ReadProcessMemory`/`WriteProcessMemory`, and does not inject DLLs or create remote threads in the tracked application.
-
-Instead:
-
-- Process discovery uses a system process snapshot.
-- Window information is retrieved through normal Win32 window APIs.
-- Performance telemetry is obtained primarily through PresentMon.
-- CPU hardware telemetry avoids kernel-level monitoring drivers; Clockwork does not use PawnIO.
-- The overlay itself is a separate top-level window configured with click-through/no-activate/tool-window extended styles.
-
-CPU hardware sensor coverage is intentionally limited. Clockwork avoids kernel-level drivers such as PawnIO; without a driver providing direct hardware access, accurate per-logical-processor CPU frequency readings are not reliably available through the user-mode interfaces used here. CPU temperature, voltage, and power are also not presented as dependable metrics without that kind of hardware access.
-
-### Important disclaimer
-
-No third-party monitoring application can honestly guarantee compatibility with every anti-cheat product or every future game update. Clockwork is **anticheat-conscious by architecture**, not an anti-cheat compatibility guarantee.
-
-If a particular game or anti-cheat system blocks PresentMon or another telemetry source, Clockwork cannot override that restriction safely.
+* No DLL injection (`CreateRemoteThread`, `SetWindowsHookEx`, `AppInit_DLLs`).
+* No process memory reading or writing (`OpenProcess` with memory access, `ReadProcessMemory`, `WriteProcessMemory`).
+* No custom kernel-mode drivers.
+* Overlay rendering is handled by an external Avalonia window positioned directly over the game's client coordinates using Win32 extended styles.
+* Frame and GPU telemetry are gathered via ETW through the official Intel PresentMon Service.
 
 ---
 
-## 📡 PresentMon Dependency
+## 📡 PresentMon & App Updates
 
-Clockwork uses **PresentMon** as its main performance telemetry backend.
+### PresentMon Service Dependency
 
-PresentMon is maintained separately from Clockwork. Clockwork does not bundle a hardcoded PresentMon version into its source code or depend on a manually maintained version number for its update logic.
+Clockwork utilizes the **PresentMon API v3** (`PresentMonAPI2.dll`). On startup, `PresentMonUpdateService` handles the dependency:
 
-The current startup flow is:
+1. Scans standard installation paths (`%ProgramFiles%\Intel\PresentMonSharedService`, `%ProgramFiles%\Intel\PresentMon`, etc.).
+2. Checks the official GitHub releases for `GameTechDev/PresentMon`.
+3. If missing or older than the latest compatible release (v2.x line), the MSI installer is downloaded over HTTPS.
+4. Validates the SHA-256 digest against the release checksum file or release digest.
+5. Verifies the Authenticode signature on the MSI installer.
+6. Executes `msiexec.exe /i <path> /qn /norestart` via an administrative prompt.
+7. If offline, Clockwork continues seamlessly with the installed version or informs the user if PresentMon is missing.
 
-```text
-Clockwork starts
-      │
-      ▼
-Check official PresentMon release information
-      │
-      ├── Internet unavailable + PresentMon installed
-      │       └── Continue using installed PresentMon
-      │
-      ├── Internet unavailable + PresentMon missing
-      │       └── Explain that PresentMon is required
-      │
-      ├── Installed version is current
-      │       └── Continue normally
-      │
-      └── Newer release available
-              └── Download → verify → install → continue
-```
+### Application Updates (Velopack)
 
-The current updater retrieves the latest release from the official PresentMon GitHub release API:
-
-```text
-https://api.github.com/repos/GameTechDev/PresentMon/releases/latest
-```
-
-It then:
-
-1. Reads the installed `PresentMonAPI2.dll` file version.
-2. Reads the latest official release tag.
-3. Compares the installed and latest release versions.
-4. Selects an MSI, preferring an x64 MSI when one is available.
-5. Downloads the installer over HTTPS from `github.com`.
-6. Verifies the SHA-256 digest when the GitHub release supplies one.
-7. Installs it through Windows Installer (`msiexec.exe`) using a silent, no-restart installation.
-8. Re-checks the installed version after installation.
-
-The current source requires **PresentMon API major version 3** and reports **PresentMon Service 2.3.1 or newer** when the required API DLL cannot be found.
-
-### Official PresentMon resources
-
-- PresentMon repository: https://github.com/GameTechDev/PresentMon
-- PresentMon releases: https://github.com/GameTechDev/PresentMon/releases
-
----
-
-## 🖥️ Overlay
-
-The live overlay is intentionally kept visually distinct from the control application.
-
-The overlay supports:
-
-- configurable horizontal position
-- configurable vertical position
-- configurable scale
-- optional solid black background
-- configurable background opacity
-- click-through interaction
-- no input focus
-- hidden-from-task-switcher behavior
-- automatic visibility based on the tracked application
-
-### Positioning
-
-Horizontal and vertical positions are stored as percentages of the tracked application's client/monitor area. This makes the overlay position more consistent across different resolutions and display modes.
-
-The default position is:
-
-```text
-X = 0%
-Y = 0%
-```
-
-The settings UI also contains a live draggable preview.
-
-### Scale
-
-The overlay scale is stored as a percentage and converted into a layout scale at runtime. Reapplying the same scale is avoided through cached state so the overlay does not repeatedly rebuild the same transform.
-
-### Appearance
-
-The live overlay has its own visual styling and is intentionally kept separate from the main application's theme. Changing the application's graphite/periwinkle UI palette does not alter the live overlay design.
-
----
-
-## 🔔 System Tray Behavior
-
-Clockwork remains resident in the system tray when the main window is closed.
-
-### Main window close button
-
-Clicking the normal **X** does not terminate the process. Instead:
-
-```text
-X
- ↓
-Hide main window
- ↓
-Remove from taskbar
- ↓
-Remain in system tray
-```
-
-### Tray interactions
-
-Left-clicking the tray icon restores Clockwork.
-
-Right-clicking the tray icon provides:
-
-- **Open Clockwork**
-- **Close Clockwork**
-
-**Close Clockwork** performs the actual application shutdown.
-
-Application/OS shutdown paths are still allowed to close the application normally.
-
-This behavior is implemented using Avalonia's tray support and an explicit desktop shutdown mode so that hiding the window does not terminate the process.
-
----
-
-## 💾 Settings and Persistence
-
-Clockwork stores user settings outside the application installation directory, under the user's local application-data area.
-
-This includes:
-
-- enabled/disabled statistics
-- whether windowed games are included in detection
-- overlay X position
-- overlay Y position
-- overlay scale
-- overlay background enabled state
-- overlay background opacity
-
-Settings writes are **debounced** rather than written immediately for every individual UI change. The pending state is flushed when the application exits.
+Clockwork checks for GitHub releases in the background via **Velopack**. When an update is ready, it downloads silently and applies upon closing Clockwork without interrupting active gaming sessions.
 
 ---
 
 ## ⚡ Performance Architecture
 
-Clockwork is designed so that expensive telemetry work does not run unnecessarily on the UI thread.
+To maintain negligible CPU and memory overhead, Clockwork isolates telemetry into discrete stages:
 
-### Two telemetry loops
+```text
+┌────────────────────────────────────────────────────────┐
+│               Detection Loop (500 ms)                  │
+│       Finds active game, manages session state         │
+└──────────────────────────┬─────────────────────────────┘
+                           │
+           ┌───────────────┴───────────────┐
+           ▼                               ▼
+┌─────────────────────────────┐ ┌────────────────────────┐
+│   Telemetry Loop (100 ms)   │ │  Fast Loop (16 ms)     │
+│  Polled GPU/CPU telemetry,  │ │  ETW frame events &    │
+│  system RAM, session timer  │ │  latency (100 ms UI)   │
+└──────────────┬──────────────┘ └──────────┬─────────────┘
+               │                           │
+               └──────────────┬────────────┘
+                              ▼
+               ┌─────────────────────────────┐
+               │    Overlay UI Dispatcher    │
+               │   Updates changed values    │
+               └─────────────────────────────┘
 
-**Slow telemetry loop:** approximately every **500 ms**.
+```
 
-Used for tasks such as:
-
-- application/game detection
-- session transitions
-- normal telemetry polling
-- overlay visibility decisions
-
-**Fast telemetry loop:** approximately every **20 ms**, but only while high-frequency frame metrics require it. Session playtime and system time updates are handled outside this fast loop.
-
-Used for:
-
-- current FPS
-- GPU latency
-- display latency
-- render/present latency
-- other frame-level latency statistics
-
-When no fast statistics are enabled, the fast loop waits rather than continuously polling.
-
-### Enabled-stat planning
-
-The enabled statistic set is cached. Clockwork derives a PresentMon metric plan from that set and only registers/queries telemetry that is currently needed.
-
-Changing the selected statistics causes the relevant telemetry plan to be rebuilt rather than keeping every possible PresentMon metric active all the time.
-
-### Frame history
-
-Frame timing uses a fixed-size `double[20000]` ring buffer and maintains a running sum. This reduces repeated list allocations and makes average/low-FPS calculations more predictable.
-
-### UI updates
-
-Telemetry collection occurs on worker tasks, with shared telemetry bindings and metrics synchronized during polling. Only visual updates are posted back to Avalonia's UI dispatcher; startup dialogs and window-state checks are also marshaled to the UI thread.
-
----
-
-## 🧩 Technology Stack
-
-| Component | Technology |
-|---|---|
-| Language | C# |
-| Runtime | .NET 10 |
-| UI framework | Avalonia UI 12.1.3 |
-| Rendering | Skia |
-| Text shaping | HarfBuzz |
-| Platform | Windows x64 |
-| GPU/frame telemetry | PresentMon |
-| Native interop | Win32 / P/Invoke |
-| Planned application packaging | Velopack |
-| Planned release distribution | GitHub Releases + GitHub Actions |
-
-The current project explicitly targets x64 and uses explicit Avalonia Win32/Skia/HarfBuzz backends rather than the generic platform-detection setup.
+* **Selective PresentMon Queries**: Only statistics enabled in settings are registered in dynamic and frame query elements.
+* **Fast Loop Hibernation**: If no latency or fast frame metrics are enabled, the 16 ms timer hibernates on a semaphore to eliminate unnecessary polling.
+* **Change Deduplication**: The `StatSlot` pipeline formats and posts values to the UI thread only when the visible text representation actually changes.
 
 ---
 
@@ -409,190 +226,77 @@ The current project explicitly targets x64 and uses explicit Avalonia Win32/Skia
 
 ```text
 Clockwork/
+├── .github/
+│   └── workflows/              # CI and Velopack Release workflows
 ├── Assets/
-│   └── Icons/
-│       ├── Clockwork.ico
-│       └── *.svg
-│
+│   └── Icons/                  # Application icons & metric SVGs
 ├── Controls/
-│   └── AspectRatioBorder.cs
-│
+│   └── AspectRatioBorder.cs    # Aspect-ratio preview control
 ├── Converters/
-│   └── SvgAssetValueConverter.cs
-│
+│   └── SvgAssetValueConverter.cs # Lightweight cached SVG-to-DrawingImage converter
 ├── Overlay/
-│   ├── IgnoredApplications.cs
-│   ├── OverlayController.cs
-│   ├── OverlayViewModel.cs
-│   ├── OverlayWindow.axaml
-│   ├── OverlayWindow.axaml.cs
-│   └── Win32.cs
-│
+│   ├── IgnoredApplications.cs  # Built-in process ignore blacklist
+│   ├── OverlayController.cs    # Orchestrator for loops, detection, & telemetry
+│   ├── OverlayStatFormatter.cs # Invariant string formatting & StatSlot change detection
+│   ├── OverlayViewModel.cs     # Observable line collection
+│   ├── OverlayWindow.axaml     # Topmost click-through overlay window
+│   ├── Stats.cs                # StatRegistry, StatSet (bitmask), and stat definitions
+│   └── Win32.cs                # P/Invoke definitions & GameDetector
 ├── Services/
-│   ├── PresentMonMonitor.cs
-│   ├── PresentMonNative.cs
-│   ├── PresentMonUpdateService.cs
-│   ├── SettingsService.cs
-│   └── StartupMessageBox.cs
-│
-├── ViewModels/
-│   ├── MainWindowViewModel.cs
-│   ├── OptionViewModel.cs
-│   ├── SectionViewModel.cs
-│   └── ViewModelBase.cs
-│
-├── Views/
-│   ├── MainWindow.axaml
-│   └── MainWindow.axaml.cs
-│
-├── App.axaml
-├── App.axaml.cs
-├── Clockwork.csproj
-├── Clockwork.slnx
-├── Program.cs
-└── app.manifest
+│   ├── AppUpdateService.cs     # Velopack background updater
+│   ├── ChecksumParser.cs       # SHA-256 release checksum extraction
+│   ├── FrameStatistics.cs      # Ring buffer for FPS & percentile low calculations
+│   ├── MsiSignatureVerifier.cs # Authenticode MSI digital signature validation
+│   ├── PresentMonMonitor.cs    # Native PresentMon API v3 client
+│   ├── PresentMonNative.cs     # C ABI bindings for PresentMonAPI2.dll
+│   ├── PresentMonUpdateService.cs # Automated PresentMon installer/updater
+│   ├── SettingsService.cs      # JSON settings persistence
+│   ├── SingleInstance.cs       # Mutex and window activation handler
+│   ├── StartupMessageBox.cs    # Dialog prompt for dependency status
+│   └── TelemetryDiagnostics.cs # Local diagnostic logging
+├── tests/
+│   └── Clockwork.Tests/        # Unit test suite (xUnit)
+├── ViewModels/                 # MVVM view models for MainWindow
+├── Views/                      # MainWindow XAML and custom chrome implementation
+├── App.axaml                   # Application styles & system tray menu
+├── Clockwork.csproj            # .NET 10 project definition
+├── Clockwork.slnx              # Solution file
+└── Program.cs                  # Entry point & Velopack launcher
+
 ```
 
-### Important classes
-
-#### `OverlayController`
-
-The central orchestration layer for game detection, telemetry, session state, enabled-stat planning, overlay updates, and background worker loops.
-
-#### `PresentMonMonitor`
-
-Owns the PresentMon API session, introspection, dynamic/frame queries, telemetry binding, frame history, FPS calculation, low-FPS calculation, and GPU/device selection.
-
-#### `PresentMonNative`
-
-Contains the native PresentMon API bindings, structures, delegates, dynamic library loading logic, and compatibility search paths for `PresentMonAPI2.dll`.
-
-#### `PresentMonUpdateService`
-
-Keeps the separately installed PresentMon dependency current without a hardcoded release version. It also handles offline and installation-failure states.
-
-#### `SettingsService`
-
-Loads and saves Clockwork's user settings in the user's local application-data directory.
-
-#### `MainWindowViewModel`
-
-Defines the available sections/statistics and manages their persisted UI state and overlay settings.
-
-#### `MainWindow`
-
-Contains the configuration UI, overlay-position preview, custom title-bar behavior, resize handling, and tray/minimize-to-tray integration hooks.
-
 ---
 
-## 🔧 Requirements
+## 🔧 Building & Testing
 
-### Runtime / OS
+### Prerequisites
 
-The current project targets:
+* Windows 10/11 x64
+* [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 
-```text
-Windows x64
-.NET 10
+### Build
+
+```shell
+dotnet build Clockwork.slnx -c Release
+
 ```
 
-Because the application targets `net10.0-windows`, compatibility should be evaluated against the Windows versions supported by the .NET 10 runtime as well as the graphics/runtime requirements of Avalonia.
+### Run Tests
 
----
+```shell
+dotnet test Clockwork.slnx -c Release
 
-## 🔐 Distribution / Security Notes
-
-Clockwork's release system should follow a few basic rules:
-
-- Only use the official PresentMon GitHub repository as the PresentMon update source.
-- Only accept HTTPS downloads for PresentMon assets.
-- Restrict downloaded PresentMon installer URLs to `github.com`.
-- Verify a release digest when one is provided.
-- Do not embed a privileged GitHub token inside the distributed Clockwork application.
-- Keep Clockwork's settings outside the application installation directory.
-- Do not add process-memory manipulation merely to obtain a statistic that can be sourced elsewhere.
-
-Velopack will be responsible for Clockwork packages; PresentMon's official MSI remains an external dependency rather than being silently repackaged into Clockwork.
-
----
-
-## 🐛 Troubleshooting
-
-### Clockwork opens but performance metrics are unavailable
-
-Check that PresentMon is installed and that its `PresentMonAPI2.dll` is discoverable. Clockwork will try the PresentMon installation/update flow at startup and will report failures through the startup message box.
-
-### PresentMon cannot be updated
-
-The updater requires network access to the official PresentMon GitHub release feed and downloads the official MSI over HTTPS. If no Internet connection is available, Clockwork uses the installed version when possible.
-
-### The overlay does not appear
-
-Check:
-
-- a compatible fullscreen application is actually in the foreground;
-- the application is not in Clockwork's ignore list;
-- the desired statistic is enabled;
-- PresentMon is available for the metrics being requested.
-
-### Settings reset after changing options
-
-Clockwork debounces settings saves and flushes them on shutdown. If settings are lost repeatedly, inspect the user's local application-data directory and any filesystem permissions affecting the Clockwork settings file.
-
-### Why does a particular PresentMon statistic show `N/A`?
-
-PresentMon metrics are dependent on the API's introspected metric set and the telemetry exposed by the current graphics/system environment. A statistic can exist in the Clockwork UI while remaining unavailable on a particular machine.
-
----
-
-## 🤝 Contributing
-
-Contributions, bug reports, and technical feedback are welcome.
-
-When submitting an issue, useful information includes:
-
-- Windows version/build
-- GPU model and driver version
-- CPU model
-- PresentMon version
-- whether Clockwork was installed or run from a development build
-- which statistic or feature is affected
-- whether the issue reproduces with only the relevant statistic enabled
-
-For performance-related issues, avoid attaching private telemetry or system information that is unrelated to the problem.
-
----
-
-## 🔗 Useful Links
-
-- Avalonia UI: https://avaloniaui.net/
-- .NET: https://dotnet.microsoft.com/
-- PresentMon: https://github.com/GameTechDev/PresentMon
-- Velopack: https://velopack.io/
-- Velopack documentation: https://docs.velopack.io/
-
----
-
-## ❤️ Philosophy
-
-Clockwork is intended to be a monitoring tool that gets out of the way.
-
-The ideal experience is simple:
-
-```text
-Launch Clockwork
-      ↓
-Choose the statistics you care about
-      ↓
-Start a game
-      ↓
-See the information you need
-      ↓
-Forget that Clockwork is even there
 ```
 
-No unnecessary overlays, no huge monitoring suite, no requirement to configure every statistic every time, and no reason to interact with the monitored application's memory.
+### Run Application
+
+```shell
+dotnet run --project Clockwork.csproj -c Release
+
+```
 
 ---
 
-**Clockwork** — lightweight telemetry, clean presentation, and as little interference as practical. ⚙️
+## 📄 License
+
+Clockwork is licensed under the [MIT License](https://www.google.com/search?q=LICENSE).
