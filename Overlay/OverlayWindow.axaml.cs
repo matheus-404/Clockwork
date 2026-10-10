@@ -9,6 +9,7 @@ public partial class OverlayWindow : Window
     private bool _lastBackgroundEnabled;
     private byte _lastBackgroundAlpha;
     private bool _hasAppearance;
+
     public OverlayWindow()
     {
         InitializeComponent();
@@ -55,28 +56,30 @@ public partial class OverlayWindow : Window
         _hasAppearance = true;
     }
 
-    /// <summary>
-    /// Re-asserts this window at the top of the topmost band without activating, moving or
-    /// resizing it. Useful after the game window regains focus, because a borderless game that
-    /// also sets itself topmost could otherwise end up above the overlay.
-    /// </summary>
     public void EnsureTopmost()
     {
         var hwnd = TryGetPlatformHandle()?.Handle ?? 0;
         Win32.BringToTopmost(hwnd);
+        ApplyExtendedStyles();
     }
 
     protected override void OnOpened(EventArgs e)
     {
         base.OnOpened(e);
+        ApplyExtendedStyles();
+    }
 
-        // Click-through + never takes focus + hidden from Alt-Tab. Purely a flag on OUR window.
+    private void ApplyExtendedStyles()
+    {
         var hwnd = TryGetPlatformHandle()?.Handle ?? 0;
         if (hwnd == 0) return;
 
         var style = Win32.GetWindowLongPtr(hwnd, Win32.GWL_EXSTYLE);
-        Win32.SetWindowLongPtr(hwnd, Win32.GWL_EXSTYLE, style
+        var targetStyle = style
             | Win32.WS_EX_TRANSPARENT | Win32.WS_EX_LAYERED
-            | Win32.WS_EX_TOOLWINDOW | Win32.WS_EX_NOACTIVATE);
+            | Win32.WS_EX_TOOLWINDOW | Win32.WS_EX_NOACTIVATE;
+
+        if (style != targetStyle)
+            Win32.SetWindowLongPtr(hwnd, Win32.GWL_EXSTYLE, targetStyle);
     }
 }

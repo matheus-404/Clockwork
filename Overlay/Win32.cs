@@ -34,12 +34,14 @@ internal struct MEMORYSTATUSEX
 /// <summary>Pure window geometry helpers (no Win32 calls, so they can be unit tested).</summary>
 internal static class WindowGeometry
 {
+    private const int TolerancePixels = 4;
+
     /// <summary>True when <paramref name="area"/> fully covers <paramref name="monitor"/>.</summary>
     public static bool CoversMonitor(RECT area, RECT monitor) =>
-        area.Left <= monitor.Left &&
-        area.Top <= monitor.Top &&
-        area.Right >= monitor.Right &&
-        area.Bottom >= monitor.Bottom;
+        area.Left <= monitor.Left + TolerancePixels &&
+        area.Top <= monitor.Top + TolerancePixels &&
+        area.Right >= monitor.Right - TolerancePixels &&
+        area.Bottom >= monitor.Bottom - TolerancePixels;
 }
 
 internal static class Win32
@@ -124,7 +126,6 @@ internal static class Win32
     private const int StatusInfoLengthMismatch = unchecked((int)0xC0000004);
     private const int StatusBufferTooSmall = unchecked((int)0xC0000023);
 
-    // Offsets into SYSTEM_PROCESS_INFORMATION (x64).
     private const int PrivateWorkingSetOffset = 8;
     private const int CreateTimeOffset = 32;
     private const int ProcessNameOffset = 56;
@@ -132,10 +133,6 @@ internal static class Win32
     private const int WorkingSetOffset = 144;
     private const int MinEntryRequiredSize = WorkingSetOffset + sizeof(long);
 
-    /// <summary>
-    /// Re-asserts that a window of ours sits at the top of the topmost band. Only our own
-    /// window is touched; it is not activated, moved or resized.
-    /// </summary>
     public static bool BringToTopmost(nint hwnd)
     {
         if (hwnd == 0)
@@ -184,14 +181,9 @@ internal static class Win32
 
             monitor = mi.rcMonitor;
 
-            // Use the client area, not the window rectangle: a maximized window's rectangle
-            // overshoots the monitor by its invisible resize border, which made ordinary
-            // maximized apps look like fullscreen games. The client area of a maximized window
-            // never covers the monitor (the title bar is excluded), while a borderless game's does.
             var area = TryGetClientAreaScreenRect(hwnd, out var clientRect) ? clientRect : windowRect;
             isFullscreen = WindowGeometry.CoversMonitor(area, monitor);
 
-            // Enforce Fullscreen/Borderless if windowed games are not explicitly allowed.
             if (!isFullscreen && !includeWindowedGames)
                 return false;
 
@@ -380,8 +372,6 @@ internal static class Win32
                     if (nextCapacity <= _capacity || nextCapacity > 256 * 1024 * 1024)
                         return false;
 
-                    // Allocate first, then free: if allocation throws, _buffer is still valid and
-                    // Dispose will not free a dangling pointer.
                     var newBuffer = Marshal.AllocHGlobal(nextCapacity);
                     Marshal.FreeHGlobal(_buffer);
                     _buffer = newBuffer;
@@ -414,6 +404,7 @@ internal static class Win32
                     var privateWorkingSet = ReadNonNegativeInt64(entry, PrivateWorkingSetOffset);
                     var createTime = Marshal.ReadInt64(entry, CreateTimeOffset);
                     _requested[pid] = new ProcessSnapshot(name ?? string.Empty, privateWorkingSet, createTime);
+                    break;
                 }
 
                 if (nextOffset == 0 || nextOffset > (uint)(limit - offset))
@@ -469,10 +460,6 @@ internal static class Win32
     }
 }
 
-/// <param name="PrivateWorkingSetBytes">
-/// The process's private working set (what Task Manager's Memory column shows), not the total
-/// working set, which also counts shared pages.
-/// </param>
 internal readonly record struct ProcessSnapshot(string Name, long? PrivateWorkingSetBytes, long CreateTime);
 
 internal readonly record struct GameInfo(
@@ -487,11 +474,6 @@ internal readonly record struct GameInfo(
     bool IsWindowVisible,
     bool IsMinimized);
 
-/// <summary>
-/// Finds the foreground game and keeps it up to date. The expensive process-table query is cached
-/// per (pid, window) so it only runs when the foreground window changes, or about once a second
-/// when a statistic that needs fresh process memory is enabled.
-/// </summary>
 internal sealed class GameDetector : IDisposable
 {
     private static readonly long FreshTicks = Stopwatch.Frequency;
@@ -543,9 +525,6 @@ internal sealed class GameDetector : IDisposable
         var now = Stopwatch.GetTimestamp();
         var current = tracked;
 
-        // While the game's window still exists the process is alive, so the process table only
-        // needs to be read when fresh memory numbers are wanted (about once a second) or when the
-        // window is gone and liveness has to be confirmed.
         var windowAlive = Win32.IsWindowForProcess(tracked.WindowHandle, tracked.Pid);
         var needSnapshot = !windowAlive || (needFreshWorkingSet && now - _trackedRefreshAt >= FreshTicks);
 
@@ -591,10 +570,6 @@ internal sealed class GameDetector : IDisposable
         return UpdateWindowState(tracked with { WindowHandle = hwnd }, out game);
     }
 
-    /// <summary>
-    /// Strips only a trailing ".exe". (Path.GetFileNameWithoutExtension would also cut names such
-    /// as "soffice.bin" or "Rocket.Chat" in the wrong place.)
-    /// </summary>
     public static string NormalizeExecutableName(string? name)
     {
         if (string.IsNullOrWhiteSpace(name))

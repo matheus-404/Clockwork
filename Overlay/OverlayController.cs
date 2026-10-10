@@ -7,23 +7,11 @@ using Clockwork.ViewModels;
 
 namespace Clockwork.Overlay;
 
-/// <summary>
-/// Tracks the foreground game and feeds the overlay. All process enumeration and PresentMon
-/// collection happens on background workers; the UI dispatcher is used only for visual updates.
-/// </summary>
-/// <remarks>
-/// Three workers run: detection (what is the game, where is its window), telemetry (everything
-/// except FPS/latency, 10 Hz) and a fast loop that drains PresentMon frames about 60 times a
-/// second but only publishes FPS/latency text every <see cref="DisplayIntervalMs"/> so the
-/// overlay stays readable and cheap to redraw.
-/// </remarks>
 public sealed class OverlayController : IDisposable
 {
     private const int DetectionIntervalMs = 500;
     private const int TelemetryIntervalMs = 100;
     private const int FrameDrainIntervalMs = 16;
-
-    /// <summary>How often FPS and latency text is refreshed on screen. Lower is snappier but harder to read.</summary>
     private const int DisplayIntervalMs = 100;
 
     private const int HiddenTelemetryDivisor = DetectionIntervalMs / TelemetryIntervalMs;
@@ -42,10 +30,8 @@ public sealed class OverlayController : IDisposable
     private readonly object _presentMonSync = new();
     private readonly Dictionary<string, OverlayLine> _lineByLabel = new(StringComparer.Ordinal);
 
-    // Per-process playtime clocks, so switching between two detected apps does not reset either.
     private readonly Dictionary<(int Pid, long CreateTime), long> _sessionStarts = new();
 
-    // Scratch buffers owned by exactly one worker each, reused every tick.
     private readonly double?[] _values = new double?[StatRegistry.Count];
     private readonly double?[] _fastValues = new double?[StatRegistry.Count];
     private readonly List<LineValueUpdate> _normalUpdates = new(32);
@@ -63,7 +49,6 @@ public sealed class OverlayController : IDisposable
     private bool _overlayWanted;
     private int _hiddenTelemetryTicks;
 
-    // UI-thread state.
     private OverlayWindow? _window;
     private GameInfo _lastUiGame;
     private bool _hasLastUiGame;
@@ -93,7 +78,6 @@ public sealed class OverlayController : IDisposable
         _fastTask = Task.Run(FastTelemetryLoopAsync);
     }
 
-    /// <summary>Call after PresentMon was installed or updated so the overlay reconnects immediately.</summary>
     public void NotifyPresentMonChanged() => _presentMon.RequestImmediateRetry();
 
     private void OnOptionPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -148,8 +132,6 @@ public sealed class OverlayController : IDisposable
         }
     }
 
-    // ---- worker loops -------------------------------------------------------------------------
-
     private Task DetectionLoopAsync() => RunPeriodicAsync("Detection", DetectionIntervalMs, UpdateDetection);
 
     private Task TelemetryLoopAsync() => RunPeriodicAsync("Telemetry", TelemetryIntervalMs, UpdateTelemetry);
@@ -188,7 +170,6 @@ public sealed class OverlayController : IDisposable
             {
                 if (!Volatile.Read(ref _fastLoopActive))
                 {
-                    // Asleep: no timer, no polling, and no thread-pool thread is blocked while waiting.
                     await _fastWake.WaitAsync(token).ConfigureAwait(false);
                     continue;
                 }
@@ -223,8 +204,6 @@ public sealed class OverlayController : IDisposable
         catch (ObjectDisposedException) { }
     }
 
-    // ---- detection ---------------------------------------------------------------------------
-
     private void UpdateDetection()
     {
         var enabled = Volatile.Read(ref _enabled);
@@ -241,9 +220,6 @@ public sealed class OverlayController : IDisposable
             return;
         }
 
-        // Only managed state is touched under _stateSync. PresentMon follows the new PID on its
-        // own (the telemetry loop restarts tracking), so no PresentMon lock is ever taken while
-        // _stateSync is held.
         lock (_stateSync)
         {
             if (game.Pid != _gamePid)
@@ -329,7 +305,6 @@ public sealed class OverlayController : IDisposable
         return true;
     }
 
-    // Callers hold _stateSync.
     private long GetOrCreateSessionStart(GameInfo game)
     {
         var key = (game.Pid, game.CreateTime);
@@ -390,8 +365,6 @@ public sealed class OverlayController : IDisposable
         return Math.Max(0, elapsedTicks) / Stopwatch.Frequency;
     }
 
-    // ---- telemetry ---------------------------------------------------------------------------
-
     private void UpdateTelemetry()
     {
         var enabled = Volatile.Read(ref _enabled);
@@ -407,8 +380,6 @@ public sealed class OverlayController : IDisposable
             game = tracked;
         }
 
-        // While the overlay is hidden the game is still tracked (so averages keep going) but only
-        // sampled at the detection rate.
         if (!Volatile.Read(ref _overlayWanted) && ++_hiddenTelemetryTicks < HiddenTelemetryDivisor)
             return;
 
@@ -433,7 +404,6 @@ public sealed class OverlayController : IDisposable
         if (enabled.NormalSlots.Length == 0)
             return;
 
-        // Reads managed data only, so it does not need (and never blocks) the native-call lock.
         if (!enabled.PresentMonNormal.IsEmpty)
             _presentMon.FillSnapshot(enabled.PresentMonNormal, _values);
 
@@ -467,15 +437,15 @@ public sealed class OverlayController : IDisposable
         switch (definition.Kind)
         {
             case StatKind.Number:
-            {
-                var value = _values[(int)definition.Id];
-                return slot.TryUpdateNumber(value, StatusFor(definition.Id, value), out text);
-            }
+                {
+                    var value = _values[(int)definition.Id];
+                    return slot.TryUpdateNumber(value, StatusFor(definition.Id, value), out text);
+                }
             case StatKind.Flag:
-            {
-                var value = _values[(int)definition.Id];
-                return slot.TryUpdateFlag(value, StatusFor(definition.Id, value), out text);
-            }
+                {
+                    var value = _values[(int)definition.Id];
+                    return slot.TryUpdateFlag(value, StatusFor(definition.Id, value), out text);
+                }
             case StatKind.Ram:
                 return slot.TryUpdateText(
                     ram is { } memory
@@ -519,8 +489,6 @@ public sealed class OverlayController : IDisposable
 
         lock (_presentMonSync)
         {
-            // Skip until PresentMon has actually switched to the current game, so a new game never
-            // briefly shows the previous game's numbers.
             if (Volatile.Read(ref _gamePid) != game.Pid || _presentMon.TrackedPid != game.Pid)
                 return;
 
@@ -548,8 +516,6 @@ public sealed class OverlayController : IDisposable
         PostUiBackground(() => ApplyLineValues(enabled, batch));
     }
 
-    // ---- enabled statistics ------------------------------------------------------------------
-
     private EnabledSnapshot BuildEnabledSnapshot()
     {
         var slots = new List<StatSlot>();
@@ -564,8 +530,6 @@ public sealed class OverlayController : IDisposable
 
         return new EnabledSnapshot(slots.ToArray());
     }
-
-    // ---- UI-thread work ----------------------------------------------------------------------
 
     private void PostUi(Action action)
     {
@@ -585,7 +549,6 @@ public sealed class OverlayController : IDisposable
 
     private void ApplyDetectionUpdate(EnabledSnapshot enabled, GameInfo game, bool showOverlay)
     {
-        // Stale update: the set of enabled statistics changed after this was queued.
         if (_disposed || !ReferenceEquals(enabled, Volatile.Read(ref _enabled)))
             return;
 
@@ -614,7 +577,6 @@ public sealed class OverlayController : IDisposable
 
             ApplyOverlayPlacement(game);
 
-            // A borderless game that also sets itself topmost could otherwise end up above us.
             if (justShown || !_uiWasShowing)
                 _window.EnsureTopmost();
 
@@ -786,20 +748,14 @@ public sealed class OverlayController : IDisposable
         _cts.Cancel();
         SignalFastLoop();
 
-        bool workersStopped;
-        try { workersStopped = Task.WaitAll([_detectionTask, _telemetryTask, _fastTask], TimeSpan.FromSeconds(1)); }
-        catch { workersStopped = true; }
+        try { Task.WaitAll([_detectionTask, _telemetryTask, _fastTask], TimeSpan.FromMilliseconds(500)); }
+        catch { }
 
         if (_window is not null)
         {
             _window.SizeChanged -= OnOverlayWindowSizeChanged;
             _window.Close();
-        }
-
-        if (!workersStopped)
-        {
-            GC.SuppressFinalize(this);
-            return;
+            _window = null;
         }
 
         EndSession();
@@ -813,11 +769,6 @@ public sealed class OverlayController : IDisposable
 
     private readonly record struct LineValueUpdate(string Label, string Value);
 
-    /// <summary>
-    /// An immutable description of which statistics are on, plus the per-statistic dedupe slots.
-    /// A new snapshot is built whenever the selection changes; comparing snapshot references is
-    /// how stale UI updates are recognised and dropped.
-    /// </summary>
     private sealed class EnabledSnapshot
     {
         public EnabledSnapshot(StatSlot[] slots)

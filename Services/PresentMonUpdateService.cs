@@ -12,42 +12,17 @@ namespace Clockwork.Services;
 /// Installs the separately-installed PresentMon dependency when it is missing or too old,
 /// without embedding a PresentMon version in Clockwork's source code.
 /// </summary>
-/// <remarks>
-/// The MSI is installed with administrator rights, so the download is only trusted after:
-/// a SHA-256 from the release (the install is refused when none can be found), an Authenticode
-/// check, and holding the file open (write/delete denied) from hashing until the installer ran.
-/// </remarks>
 public sealed class PresentMonUpdateService : IDisposable
 {
     private const string GitHubReleasesUrl =
         "https://api.github.com/repos/GameTechDev/PresentMon/releases?per_page=30";
 
-    private const int ErrorCancelled = 1223; // user declined the UAC prompt
-    private const int ErrorInstallPackageOpenFailed = 1619;
+    private const int ErrorCancelled = 1223;
 
-    /// <summary>The oldest PresentMon release Clockwork supports.</summary>
     private static readonly Version MinimumSupportedVersion = new(2, 3, 1);
-
-    /// <summary>
-    /// Releases newer than this major version are never installed automatically: Clockwork talks
-    /// to PresentMon API major version 3, and a future major release may break that contract.
-    /// </summary>
     private const int MaxAutoInstallReleaseMajor = 2;
-
-    /// <summary>
-    /// When false (the default) a PresentMon install that already works is left alone, so
-    /// Clockwork never surprises you with an administrator prompt at launch. Clockwork only
-    /// installs PresentMon when it is missing or older than <see cref="MinimumSupportedVersion"/>.
-    /// </summary>
     private static readonly bool AutoUpdateWorkingInstall = false;
-
-    /// <summary>
-    /// When true an MSI without any digital signature is refused. It is off because it has not been
-    /// confirmed that every PresentMon release is signed; a signature that is present must always
-    /// be valid and from an expected publisher regardless of this setting.
-    /// </summary>
     private static readonly bool RequireSignedMsi = false;
-
     private const string ExpectedSignerName = "Intel";
 
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(8);
@@ -79,7 +54,6 @@ public sealed class PresentMonUpdateService : IDisposable
         var installed = GetInstalledVersion();
         var installedAvailable = installed is not null;
 
-        // A working install is left alone: no network, no prompt, instant startup.
         if (installed is not null && installed >= MinimumSupportedVersion && !AutoUpdateWorkingInstall)
             return PresentMonStartupResult.Current(installed, installed);
 
@@ -144,7 +118,6 @@ public sealed class PresentMonUpdateService : IDisposable
             var expectedSha = await ResolveExpectedSha256Async(release, msi, cancellationToken)
                 .ConfigureAwait(false);
 
-            // Fail closed: with no way to verify the file, nothing is installed with admin rights.
             if (expectedSha is null)
             {
                 return Fail(
@@ -193,54 +166,30 @@ public sealed class PresentMonUpdateService : IDisposable
         }
     }
 
-    /// <summary>
-    /// Verifies the downloaded file and installs it. Returns null on success or a message on failure.
-    /// </summary>
     private static async Task<string?> VerifyAndInstallAsync(
         string msiPath,
         string expectedSha256,
         CancellationToken cancellationToken)
     {
-        // From here until the installer has finished, the file is held open with writes and
-        // deletes denied, so it cannot be swapped between the checks and the elevated install.
-        var guard = OpenGuard(msiPath);
-        try
+        await using (var stream = new FileStream(
+            msiPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            64 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan))
         {
-            if (!await VerifySha256Async(guard, expectedSha256, cancellationToken).ConfigureAwait(false))
-                return "The downloaded PresentMon MSI failed its SHA-256 integrity check.";
-
-            var signature = MsiSignatureVerifier.Check(msiPath, guard.SafeFileHandle.DangerousGetHandle());
-            var signatureProblem = DescribeSignatureProblem(signature);
-            if (signatureProblem is not null)
-                return signatureProblem;
-
-            var result = await InstallMsiAsync(msiPath, cancellationToken).ConfigureAwait(false);
-            if (result.Success)
-                return null;
-
-            if (result.ExitCode != ErrorInstallPackageOpenFailed)
-                return result.Message;
-        }
-        finally
-        {
-            await guard.DisposeAsync().ConfigureAwait(false);
-        }
-
-        // Windows Installer could not open the package while it was held open. Fall back to
-        // re-verifying the file right before a second attempt without the guard.
-        var recheck = OpenGuard(msiPath);
-        try
-        {
-            if (!await VerifySha256Async(recheck, expectedSha256, cancellationToken).ConfigureAwait(false))
+            if (!await VerifySha256Async(stream, expectedSha256, cancellationToken).ConfigureAwait(false))
                 return "The downloaded PresentMon MSI failed its SHA-256 integrity check.";
         }
-        finally
-        {
-            await recheck.DisposeAsync().ConfigureAwait(false);
-        }
 
-        var retry = await InstallMsiAsync(msiPath, cancellationToken).ConfigureAwait(false);
-        return retry.Success ? null : retry.Message;
+        var signature = MsiSignatureVerifier.Check(msiPath);
+        var signatureProblem = DescribeSignatureProblem(signature);
+        if (signatureProblem is not null)
+            return signatureProblem;
+
+        var result = await InstallMsiAsync(msiPath, cancellationToken).ConfigureAwait(false);
+        return result.Success ? null : result.Message;
     }
 
     private static string? DescribeSignatureProblem(MsiSignatureResult signature)
@@ -262,9 +211,6 @@ public sealed class PresentMonUpdateService : IDisposable
                 return null;
         }
     }
-
-    private static FileStream OpenGuard(string path) =>
-        new(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.Asynchronous);
 
     private static PresentMonStartupResult Fail(Version? installed, string message) =>
         installed is null
@@ -305,10 +251,6 @@ public sealed class PresentMonUpdateService : IDisposable
         return releases ?? throw new InvalidOperationException("GitHub returned an empty release response.");
     }
 
-    /// <summary>
-    /// Picks the newest stable release Clockwork is allowed to install: not a draft or
-    /// prerelease, a valid version, no newer than the supported major version, and with an MSI.
-    /// </summary>
     private static (PresentMonRelease Release, Version Version)? SelectRelease(IEnumerable<PresentMonRelease> releases)
     {
         PresentMonRelease? best = null;
@@ -350,8 +292,6 @@ public sealed class PresentMonUpdateService : IDisposable
             throw new InvalidOperationException("PresentMon provided an invalid HTTPS GitHub download URL.");
         }
 
-        // HttpClient.Timeout only covers waiting for the response headers here, not the body, so
-        // the whole download gets its own deadline. A stalled transfer can never hang startup.
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(DownloadTimeout);
 
@@ -375,10 +315,6 @@ public sealed class PresentMonUpdateService : IDisposable
         await source.CopyToAsync(target, timeout.Token).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Finds the expected SHA-256 of the MSI: the asset digest GitHub publishes first, then a
-    /// checksum file in the release, then the release notes. Returns null when none matches.
-    /// </summary>
     private async Task<string?> ResolveExpectedSha256Async(
         PresentMonRelease release,
         PresentMonAsset msiAsset,
@@ -471,7 +407,6 @@ public sealed class PresentMonUpdateService : IDisposable
 
         using (process)
         {
-            // An unanswered UAC prompt or a hung installer must not block startup forever.
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(InstallTimeout);
 
@@ -606,7 +541,6 @@ public sealed class PresentMonUpdateService : IDisposable
         [JsonPropertyName("browser_download_url")]
         public string BrowserDownloadUrl { get; init; } = string.Empty;
 
-        /// <summary>GitHub's own checksum for the asset, formatted "sha256:&lt;hex&gt;" (when present).</summary>
         [JsonPropertyName("digest")]
         public string? Digest { get; init; }
     }
