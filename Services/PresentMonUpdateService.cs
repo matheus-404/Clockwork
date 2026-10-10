@@ -5,22 +5,55 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
 
 namespace Clockwork.Services;
 
 /// <summary>
-/// Keeps the separately-installed PresentMon dependency current without embedding a
-/// PresentMon version in Clockwork's source code.
+/// Installs the separately-installed PresentMon dependency when it is missing or too old,
+/// without embedding a PresentMon version in Clockwork's source code.
 /// </summary>
+/// <remarks>
+/// The MSI is installed with administrator rights, so the download is only trusted after:
+/// a SHA-256 from the release (the install is refused when none can be found), an Authenticode
+/// check, and holding the file open (write/delete denied) from hashing until the installer ran.
+/// </remarks>
 public sealed class PresentMonUpdateService : IDisposable
 {
-    private const string GitHubLatestReleaseUrl =
-        "https://api.github.com/repos/GameTechDev/PresentMon/releases/latest";
+    private const string GitHubReleasesUrl =
+        "https://api.github.com/repos/GameTechDev/PresentMon/releases?per_page=30";
 
     private const int ErrorCancelled = 1223; // user declined the UAC prompt
+    private const int ErrorInstallPackageOpenFailed = 1619;
+
+    /// <summary>The oldest PresentMon release Clockwork supports.</summary>
+    private static readonly Version MinimumSupportedVersion = new(2, 3, 1);
+
+    /// <summary>
+    /// Releases newer than this major version are never installed automatically: Clockwork talks
+    /// to PresentMon API major version 3, and a future major release may break that contract.
+    /// </summary>
+    private const int MaxAutoInstallReleaseMajor = 2;
+
+    /// <summary>
+    /// When false (the default) a PresentMon install that already works is left alone, so
+    /// Clockwork never surprises you with an administrator prompt at launch. Clockwork only
+    /// installs PresentMon when it is missing or older than <see cref="MinimumSupportedVersion"/>.
+    /// </summary>
+    private static readonly bool AutoUpdateWorkingInstall = false;
+
+    /// <summary>
+    /// When true an MSI without any digital signature is refused. It is off because it has not been
+    /// confirmed that every PresentMon release is signed; a signature that is present must always
+    /// be valid and from an expected publisher regardless of this setting.
+    /// </summary>
+    private static readonly bool RequireSignedMsi = false;
+
+    private const string ExpectedSignerName = "Intel";
 
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(8);
+    private static readonly TimeSpan ChecksumTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan DownloadTimeout = TimeSpan.FromMinutes(3);
+    private static readonly TimeSpan InstallTimeout = TimeSpan.FromMinutes(5);
 
     private readonly HttpClient _httpClient;
 
@@ -31,9 +64,10 @@ public sealed class PresentMonUpdateService : IDisposable
             Timeout = RequestTimeout,
         };
 
+        var appVersion = typeof(PresentMonUpdateService).Assembly.GetName().Version?.ToString(3) ?? "1.0";
         _httpClient.DefaultRequestHeaders.UserAgent.Clear();
         _httpClient.DefaultRequestHeaders.UserAgent.Add(
-            new ProductInfoHeaderValue("Clockwork", "1.0"));
+            new ProductInfoHeaderValue("Clockwork", appVersion));
         _httpClient.DefaultRequestHeaders.Accept.Add(
             new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
         _httpClient.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
@@ -45,10 +79,14 @@ public sealed class PresentMonUpdateService : IDisposable
         var installed = GetInstalledVersion();
         var installedAvailable = installed is not null;
 
-        PresentMonRelease release;
+        // A working install is left alone: no network, no prompt, instant startup.
+        if (installed is not null && installed >= MinimumSupportedVersion && !AutoUpdateWorkingInstall)
+            return PresentMonStartupResult.Current(installed, installed);
+
+        List<PresentMonRelease> releases;
         try
         {
-            release = await GetLatestReleaseAsync(cancellationToken).ConfigureAwait(false);
+            releases = await GetReleasesAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -66,9 +104,7 @@ public sealed class PresentMonUpdateService : IDisposable
                 ? installedAvailable
                     ? PresentMonStartupResult.Offline(installed)
                     : PresentMonStartupResult.MissingOffline()
-                : installedAvailable
-                    ? PresentMonStartupResult.Failed(installed, ex.Message)
-                    : PresentMonStartupResult.MissingFailed(ex.Message);
+                : Fail(installed, ex.Message);
         }
         catch (HttpRequestException ex) when (ex.StatusCode is null)
         {
@@ -76,38 +112,25 @@ public sealed class PresentMonUpdateService : IDisposable
                 ? PresentMonStartupResult.Offline(installed)
                 : PresentMonStartupResult.MissingOffline();
         }
-        catch (HttpRequestException ex)
-        {
-            return installedAvailable
-                ? PresentMonStartupResult.Failed(installed, $"PresentMon update check failed: {ex.Message}")
-                : PresentMonStartupResult.MissingFailed($"PresentMon update check failed: {ex.Message}");
-        }
         catch (Exception ex)
         {
-            return installedAvailable
-                ? PresentMonStartupResult.Failed(installed, $"PresentMon update check failed: {ex.Message}")
-                : PresentMonStartupResult.MissingFailed($"PresentMon update check failed: {ex.Message}");
+            return Fail(installed, $"PresentMon update check failed: {ex.Message}");
         }
 
-        if (!Version.TryParse(NormalizeVersion(release.TagName), out var latestVersion))
+        var selected = SelectRelease(releases);
+        if (selected is null)
         {
-            var message = $"The latest PresentMon release tag '{release.TagName}' is not a valid version.";
-            return installedAvailable
-                ? PresentMonStartupResult.Failed(installed, message)
-                : PresentMonStartupResult.MissingFailed(message);
+            return Fail(
+                installed,
+                $"No PresentMon release (version {MaxAutoInstallReleaseMajor}.x) with an MSI installer was found.");
         }
+
+        var (release, latestVersion) = selected.Value;
 
         if (installed is not null && installed >= latestVersion)
             return PresentMonStartupResult.Current(installed, latestVersion);
 
-        var msi = SelectMsi(release);
-        if (msi is null)
-        {
-            var message = "The latest PresentMon release did not contain an MSI installer.";
-            return installedAvailable
-                ? PresentMonStartupResult.Failed(installed, message)
-                : PresentMonStartupResult.MissingFailed(message);
-        }
+        var msi = SelectMsi(release)!;
 
         var temporaryMsi = Path.Combine(
             Path.GetTempPath(),
@@ -118,35 +141,30 @@ public sealed class PresentMonUpdateService : IDisposable
             await DownloadMsiAsync(msi.BrowserDownloadUrl, temporaryMsi, cancellationToken)
                 .ConfigureAwait(false);
 
-            var expectedSha = await TryGetExpectedSha256Async(release, msi, cancellationToken)
+            var expectedSha = await ResolveExpectedSha256Async(release, msi, cancellationToken)
                 .ConfigureAwait(false);
 
-            if (!string.IsNullOrWhiteSpace(expectedSha) &&
-                !await VerifySha256Async(temporaryMsi, expectedSha, cancellationToken).ConfigureAwait(false))
+            // Fail closed: with no way to verify the file, nothing is installed with admin rights.
+            if (expectedSha is null)
             {
-                return installedAvailable
-                    ? PresentMonStartupResult.Failed(installed, "The downloaded PresentMon MSI failed its SHA-256 integrity check.")
-                    : PresentMonStartupResult.MissingFailed("The downloaded PresentMon MSI failed its SHA-256 integrity check.");
+                return Fail(
+                    installed,
+                    "The release did not provide a SHA-256 checksum for the PresentMon installer, " +
+                    "so it was not installed.");
             }
 
-            var installResult = await InstallMsiAsync(temporaryMsi, cancellationToken)
+            var failure = await VerifyAndInstallAsync(temporaryMsi, expectedSha, cancellationToken)
                 .ConfigureAwait(false);
 
-            if (!installResult.Success)
-            {
-                return installedAvailable
-                    ? PresentMonStartupResult.Failed(installed, installResult.Message)
-                    : PresentMonStartupResult.MissingFailed(installResult.Message);
-            }
+            if (failure is not null)
+                return Fail(installed, failure);
 
             var updated = GetInstalledVersion();
             if (updated is null || updated < latestVersion)
             {
-                var message =
-                    $"PresentMon installation completed, but Clockwork could not verify version {latestVersion}.";
-                return installedAvailable
-                    ? PresentMonStartupResult.Failed(installed, message)
-                    : PresentMonStartupResult.MissingFailed(message);
+                return Fail(
+                    installed,
+                    $"PresentMon installation completed, but Clockwork could not verify version {latestVersion}.");
             }
 
             return installed is null
@@ -159,21 +177,15 @@ public sealed class PresentMonUpdateService : IDisposable
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return installedAvailable
-                ? PresentMonStartupResult.Failed(installed, "The PresentMon download timed out.")
-                : PresentMonStartupResult.MissingFailed("The PresentMon download timed out.");
+            return Fail(installed, "The PresentMon download timed out.");
         }
         catch (HttpRequestException ex)
         {
-            return installedAvailable
-                ? PresentMonStartupResult.Failed(installed, $"PresentMon could not be downloaded: {ex.Message}")
-                : PresentMonStartupResult.MissingFailed($"PresentMon could not be downloaded: {ex.Message}");
+            return Fail(installed, $"PresentMon could not be downloaded: {ex.Message}");
         }
         catch (Exception ex)
         {
-            return installedAvailable
-                ? PresentMonStartupResult.Failed(installed, $"PresentMon installation failed: {ex.Message}")
-                : PresentMonStartupResult.MissingFailed($"PresentMon installation failed: {ex.Message}");
+            return Fail(installed, $"PresentMon installation failed: {ex.Message}");
         }
         finally
         {
@@ -181,10 +193,88 @@ public sealed class PresentMonUpdateService : IDisposable
         }
     }
 
-    private async Task<PresentMonRelease> GetLatestReleaseAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Verifies the downloaded file and installs it. Returns null on success or a message on failure.
+    /// </summary>
+    private static async Task<string?> VerifyAndInstallAsync(
+        string msiPath,
+        string expectedSha256,
+        CancellationToken cancellationToken)
+    {
+        // From here until the installer has finished, the file is held open with writes and
+        // deletes denied, so it cannot be swapped between the checks and the elevated install.
+        var guard = OpenGuard(msiPath);
+        try
+        {
+            if (!await VerifySha256Async(guard, expectedSha256, cancellationToken).ConfigureAwait(false))
+                return "The downloaded PresentMon MSI failed its SHA-256 integrity check.";
+
+            var signature = MsiSignatureVerifier.Check(msiPath, guard.SafeFileHandle.DangerousGetHandle());
+            var signatureProblem = DescribeSignatureProblem(signature);
+            if (signatureProblem is not null)
+                return signatureProblem;
+
+            var result = await InstallMsiAsync(msiPath, cancellationToken).ConfigureAwait(false);
+            if (result.Success)
+                return null;
+
+            if (result.ExitCode != ErrorInstallPackageOpenFailed)
+                return result.Message;
+        }
+        finally
+        {
+            await guard.DisposeAsync().ConfigureAwait(false);
+        }
+
+        // Windows Installer could not open the package while it was held open. Fall back to
+        // re-verifying the file right before a second attempt without the guard.
+        var recheck = OpenGuard(msiPath);
+        try
+        {
+            if (!await VerifySha256Async(recheck, expectedSha256, cancellationToken).ConfigureAwait(false))
+                return "The downloaded PresentMon MSI failed its SHA-256 integrity check.";
+        }
+        finally
+        {
+            await recheck.DisposeAsync().ConfigureAwait(false);
+        }
+
+        var retry = await InstallMsiAsync(msiPath, cancellationToken).ConfigureAwait(false);
+        return retry.Success ? null : retry.Message;
+    }
+
+    private static string? DescribeSignatureProblem(MsiSignatureResult signature)
+    {
+        switch (signature.Status)
+        {
+            case MsiSignatureStatus.Invalid:
+                return "The downloaded PresentMon MSI has an invalid digital signature.";
+
+            case MsiSignatureStatus.Valid
+                when signature.Signer is null ||
+                     !signature.Signer.Contains(ExpectedSignerName, StringComparison.OrdinalIgnoreCase):
+                return $"The downloaded PresentMon MSI is signed by an unexpected publisher ({signature.Signer ?? "unknown"}).";
+
+            case MsiSignatureStatus.Unsigned when RequireSignedMsi:
+                return "The downloaded PresentMon MSI is not digitally signed.";
+
+            default:
+                return null;
+        }
+    }
+
+    private static FileStream OpenGuard(string path) =>
+        new(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.Asynchronous);
+
+    private static PresentMonStartupResult Fail(Version? installed, string message) =>
+        installed is null
+            ? PresentMonStartupResult.MissingFailed(message)
+            : PresentMonStartupResult.Failed(installed, message);
+
+    private async Task<List<PresentMonRelease>> GetReleasesAsync(CancellationToken cancellationToken)
     {
         using var response = await _httpClient.GetAsync(
-            GitHubLatestReleaseUrl,
+            GitHubReleasesUrl,
             HttpCompletionOption.ResponseHeadersRead,
             cancellationToken).ConfigureAwait(false);
 
@@ -207,12 +297,45 @@ public sealed class PresentMonUpdateService : IDisposable
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        var release = await JsonSerializer.DeserializeAsync<PresentMonRelease>(
+        var releases = await JsonSerializer.DeserializeAsync<List<PresentMonRelease>>(
             stream,
             JsonOptions,
             cancellationToken).ConfigureAwait(false);
 
-        return release ?? throw new InvalidOperationException("GitHub returned an empty release response.");
+        return releases ?? throw new InvalidOperationException("GitHub returned an empty release response.");
+    }
+
+    /// <summary>
+    /// Picks the newest stable release Clockwork is allowed to install: not a draft or
+    /// prerelease, a valid version, no newer than the supported major version, and with an MSI.
+    /// </summary>
+    private static (PresentMonRelease Release, Version Version)? SelectRelease(IEnumerable<PresentMonRelease> releases)
+    {
+        PresentMonRelease? best = null;
+        Version? bestVersion = null;
+
+        foreach (var release in releases)
+        {
+            if (release.Draft || release.Prerelease)
+                continue;
+
+            if (!Version.TryParse(NormalizeVersion(release.TagName), out var version))
+                continue;
+
+            if (version.Major > MaxAutoInstallReleaseMajor)
+                continue;
+
+            if (SelectMsi(release) is null)
+                continue;
+
+            if (bestVersion is null || version > bestVersion)
+            {
+                best = release;
+                bestVersion = version;
+            }
+        }
+
+        return best is null || bestVersion is null ? null : (best, bestVersion);
     }
 
     private async Task DownloadMsiAsync(
@@ -227,14 +350,19 @@ public sealed class PresentMonUpdateService : IDisposable
             throw new InvalidOperationException("PresentMon provided an invalid HTTPS GitHub download URL.");
         }
 
+        // HttpClient.Timeout only covers waiting for the response headers here, not the body, so
+        // the whole download gets its own deadline. A stalled transfer can never hang startup.
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(DownloadTimeout);
+
         using var response = await _httpClient.GetAsync(
             uri,
             HttpCompletionOption.ResponseHeadersRead,
-            cancellationToken).ConfigureAwait(false);
+            timeout.Token).ConfigureAwait(false);
 
         response.EnsureSuccessStatusCode();
 
-        await using var source = await response.Content.ReadAsStreamAsync(cancellationToken)
+        await using var source = await response.Content.ReadAsStreamAsync(timeout.Token)
             .ConfigureAwait(false);
         await using var target = new FileStream(
             destination,
@@ -244,14 +372,22 @@ public sealed class PresentMonUpdateService : IDisposable
             128 * 1024,
             FileOptions.SequentialScan | FileOptions.Asynchronous);
 
-        await source.CopyToAsync(target, cancellationToken).ConfigureAwait(false);
+        await source.CopyToAsync(target, timeout.Token).ConfigureAwait(false);
     }
 
-    private async Task<string?> TryGetExpectedSha256Async(
+    /// <summary>
+    /// Finds the expected SHA-256 of the MSI: the asset digest GitHub publishes first, then a
+    /// checksum file in the release, then the release notes. Returns null when none matches.
+    /// </summary>
+    private async Task<string?> ResolveExpectedSha256Async(
         PresentMonRelease release,
         PresentMonAsset msiAsset,
         CancellationToken cancellationToken)
     {
+        var fromDigest = ChecksumParser.NormalizeDigest(msiAsset.Digest);
+        if (fromDigest is not null)
+            return fromDigest;
+
         var checksumAsset = release.Assets.FirstOrDefault(a =>
             a.Name.EndsWith(".sha256", StringComparison.OrdinalIgnoreCase) ||
             a.Name.Contains("checksum", StringComparison.OrdinalIgnoreCase) ||
@@ -261,19 +397,22 @@ public sealed class PresentMonUpdateService : IDisposable
         {
             try
             {
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeout.CancelAfter(ChecksumTimeout);
+
                 using var response = await _httpClient.GetAsync(
                     checksumAsset.BrowserDownloadUrl,
                     HttpCompletionOption.ResponseHeadersRead,
-                    cancellationToken).ConfigureAwait(false);
+                    timeout.Token).ConfigureAwait(false);
 
                 if (response.IsSuccessStatusCode)
                 {
-                    var text = await response.Content.ReadAsStringAsync(cancellationToken)
+                    var text = await response.Content.ReadAsStringAsync(timeout.Token)
                         .ConfigureAwait(false);
 
-                    var match = Regex.Match(text, @"\b([a-fA-F0-9]{64})\b");
-                    if (match.Success)
-                        return match.Groups[1].Value;
+                    var hash = ChecksumParser.FindHashForFile(text, msiAsset.Name, allowLoneHash: true);
+                    if (hash is not null)
+                        return hash;
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -285,39 +424,20 @@ public sealed class PresentMonUpdateService : IDisposable
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(release.Body))
-        {
-            var match = Regex.Match(release.Body, $@"\b([a-fA-F0-9]{{64}})\b.*{Regex.Escape(msiAsset.Name)}", RegexOptions.IgnoreCase);
-            if (match.Success)
-                return match.Groups[1].Value;
-
-            var reverseMatch = Regex.Match(release.Body, $@"{Regex.Escape(msiAsset.Name)}.*\b([a-fA-F0-9]{{64}})\b", RegexOptions.IgnoreCase);
-            if (reverseMatch.Success)
-                return reverseMatch.Groups[1].Value;
-        }
-
-        return null;
+        return ChecksumParser.FindHashForFile(release.Body, msiAsset.Name, allowLoneHash: false);
     }
 
     private static async Task<bool> VerifySha256Async(
-        string path,
-        string digest,
+        FileStream stream,
+        string expectedHex,
         CancellationToken cancellationToken)
     {
-        var expected = digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase)
-            ? digest[7..]
-            : digest;
-
-        if (expected.Length != 64)
+        if (!ChecksumParser.IsSha256Hex(expectedHex))
             return false;
 
-        await using var stream = File.OpenRead(path);
-        using var sha = SHA256.Create();
-        var hash = await sha.ComputeHashAsync(stream, cancellationToken).ConfigureAwait(false);
-        var actual = Convert.ToHexString(hash);
-        return CryptographicOperations.FixedTimeEquals(
-            Convert.FromHexString(actual),
-            Convert.FromHexString(expected));
+        stream.Position = 0;
+        var hash = await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false);
+        return CryptographicOperations.FixedTimeEquals(hash, Convert.FromHexString(expectedHex));
     }
 
     private static async Task<MsiInstallResult> InstallMsiAsync(
@@ -342,7 +462,8 @@ public sealed class PresentMonUpdateService : IDisposable
         {
             return new MsiInstallResult(
                 false,
-                "The PresentMon installation was cancelled at the administrator prompt.");
+                "The PresentMon installation was cancelled at the administrator prompt.",
+                ErrorCancelled);
         }
 
         if (process is null)
@@ -350,13 +471,28 @@ public sealed class PresentMonUpdateService : IDisposable
 
         using (process)
         {
-            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            // An unanswered UAC prompt or a hung installer must not block startup forever.
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(InstallTimeout);
+
+            try
+            {
+                await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                return new MsiInstallResult(
+                    false,
+                    $"The PresentMon installer did not finish within {InstallTimeout.TotalMinutes:0} minutes.",
+                    -1);
+            }
 
             return process.ExitCode is 0 or 3010
-                ? new MsiInstallResult(true, string.Empty)
+                ? new MsiInstallResult(true, string.Empty, process.ExitCode)
                 : new MsiInstallResult(
                     false,
-                    $"Windows Installer exited with code {process.ExitCode}.");
+                    $"Windows Installer exited with code {process.ExitCode}.",
+                    process.ExitCode);
         }
     }
 
@@ -449,6 +585,12 @@ public sealed class PresentMonUpdateService : IDisposable
         [JsonPropertyName("tag_name")]
         public string TagName { get; init; } = string.Empty;
 
+        [JsonPropertyName("draft")]
+        public bool Draft { get; init; }
+
+        [JsonPropertyName("prerelease")]
+        public bool Prerelease { get; init; }
+
         [JsonPropertyName("body")]
         public string? Body { get; init; }
 
@@ -463,9 +605,13 @@ public sealed class PresentMonUpdateService : IDisposable
 
         [JsonPropertyName("browser_download_url")]
         public string BrowserDownloadUrl { get; init; } = string.Empty;
+
+        /// <summary>GitHub's own checksum for the asset, formatted "sha256:&lt;hex&gt;" (when present).</summary>
+        [JsonPropertyName("digest")]
+        public string? Digest { get; init; }
     }
 
-    private readonly record struct MsiInstallResult(bool Success, string Message);
+    private readonly record struct MsiInstallResult(bool Success, string Message, int ExitCode);
 }
 
 public enum PresentMonStartupStatus

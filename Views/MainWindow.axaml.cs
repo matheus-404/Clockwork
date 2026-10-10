@@ -76,8 +76,13 @@ public partial class MainWindow : Window
 
     private void OnLoaded(object? sender, RoutedEventArgs e)
     {
+        // Unsubscribe first so a second Loaded (for example after a restore from the tray) can
+        // never leave the handler subscribed twice.
         if (ViewModel is { } vm)
+        {
+            vm.PropertyChanged -= OnViewModelPropertyChanged;
             vm.PropertyChanged += OnViewModelPropertyChanged;
+        }
 
         UpdateMaximizeIcon();
         UpdateOverlayPreviewAppearance();
@@ -189,7 +194,15 @@ public partial class MainWindow : Window
             return;
 
         var scale = vm.OverlayScale / 100.0;
-        PreviewOverlay.RenderTransform = new Avalonia.Media.ScaleTransform(scale, scale);
+        if (PreviewOverlay.RenderTransform is Avalonia.Media.ScaleTransform previewScale)
+        {
+            previewScale.ScaleX = scale;
+            previewScale.ScaleY = scale;
+        }
+        else
+        {
+            PreviewOverlay.RenderTransform = new Avalonia.Media.ScaleTransform(scale, scale);
+        }
 
         var previewWidth = PreviewOverlay.Width * scale;
         var previewHeight = PreviewOverlay.Height * scale;

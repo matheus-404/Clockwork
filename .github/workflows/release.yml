@@ -21,6 +21,9 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: Run tests
+        run: dotnet test Clockwork.slnx -c Release
+
       - name: Extract version from tag
         id: get_version
         shell: bash
@@ -36,6 +39,8 @@ jobs:
           -o publish
           -r win-x64
           --self-contained true
+          -p:Version=${{ steps.get_version.outputs.VERSION }}
+          -p:PublishReadyToRun=true
 
       - name: Download previous Velopack release
         run: >

@@ -55,6 +55,17 @@ public partial class OverlayWindow : Window
         _hasAppearance = true;
     }
 
+    /// <summary>
+    /// Re-asserts this window at the top of the topmost band without activating, moving or
+    /// resizing it. Useful after the game window regains focus, because a borderless game that
+    /// also sets itself topmost could otherwise end up above the overlay.
+    /// </summary>
+    public void EnsureTopmost()
+    {
+        var hwnd = TryGetPlatformHandle()?.Handle ?? 0;
+        Win32.BringToTopmost(hwnd);
+    }
+
     protected override void OnOpened(EventArgs e)
     {
         base.OnOpened(e);

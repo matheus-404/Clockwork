@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace Clockwork.Overlay;
@@ -30,6 +31,17 @@ internal struct MEMORYSTATUSEX
                  ullTotalVirtual, ullAvailVirtual, ullAvailExtendedVirtual;
 }
 
+/// <summary>Pure window geometry helpers (no Win32 calls, so they can be unit tested).</summary>
+internal static class WindowGeometry
+{
+    /// <summary>True when <paramref name="area"/> fully covers <paramref name="monitor"/>.</summary>
+    public static bool CoversMonitor(RECT area, RECT monitor) =>
+        area.Left <= monitor.Left &&
+        area.Top <= monitor.Top &&
+        area.Right >= monitor.Right &&
+        area.Bottom >= monitor.Bottom;
+}
+
 internal static class Win32
 {
     public const int GWL_EXSTYLE = -20;
@@ -39,6 +51,11 @@ internal static class Win32
                        WS_EX_TOOLWINDOW = 0x80,
                        WS_EX_LAYERED = 0x80000,
                        WS_EX_NOACTIVATE = 0x08000000;
+
+    private const nint HWND_TOPMOST = -1;
+    private const uint SWP_NOSIZE = 0x0001;
+    private const uint SWP_NOMOVE = 0x0002;
+    private const uint SWP_NOACTIVATE = 0x0010;
 
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
     public static extern nint GetWindowLongPtr(nint hWnd, int nIndex);
@@ -88,6 +105,10 @@ internal static class Win32
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetWindowPos(nint hWnd, nint hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, nint lParam);
 
     [DllImport("ntdll.dll")]
@@ -103,11 +124,32 @@ internal static class Win32
     private const int StatusInfoLengthMismatch = unchecked((int)0xC0000004);
     private const int StatusBufferTooSmall = unchecked((int)0xC0000023);
 
+    // Offsets into SYSTEM_PROCESS_INFORMATION (x64).
+    private const int PrivateWorkingSetOffset = 8;
     private const int CreateTimeOffset = 32;
     private const int ProcessNameOffset = 56;
     private const int ProcessIdOffset = 80;
     private const int WorkingSetOffset = 144;
     private const int MinEntryRequiredSize = WorkingSetOffset + sizeof(long);
+
+    /// <summary>
+    /// Re-asserts that a window of ours sits at the top of the topmost band. Only our own
+    /// window is touched; it is not activated, moved or resized.
+    /// </summary>
+    public static bool BringToTopmost(nint hwnd)
+    {
+        if (hwnd == 0)
+            return false;
+
+        try
+        {
+            return SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     public static bool TryGetForegroundCandidate(
         bool includeWindowedGames,
@@ -141,7 +183,13 @@ internal static class Win32
                 return false;
 
             monitor = mi.rcMonitor;
-            isFullscreen = CoversMonitor(windowRect, monitor);
+
+            // Use the client area, not the window rectangle: a maximized window's rectangle
+            // overshoots the monitor by its invisible resize border, which made ordinary
+            // maximized apps look like fullscreen games. The client area of a maximized window
+            // never covers the monitor (the title bar is excluded), while a borderless game's does.
+            var area = TryGetClientAreaScreenRect(hwnd, out var clientRect) ? clientRect : windowRect;
+            isFullscreen = WindowGeometry.CoversMonitor(area, monitor);
 
             // Enforce Fullscreen/Borderless if windowed games are not explicitly allowed.
             if (!isFullscreen && !includeWindowedGames)
@@ -284,12 +332,6 @@ internal static class Win32
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX lpBuffer);
 
-    private static bool CoversMonitor(RECT window, RECT monitor) =>
-        window.Left <= monitor.Left &&
-        window.Top <= monitor.Top &&
-        window.Right >= monitor.Right &&
-        window.Bottom >= monitor.Bottom;
-
     internal sealed class ProcessSnapshotTable : IDisposable
     {
         private nint _buffer;
@@ -338,9 +380,12 @@ internal static class Win32
                     if (nextCapacity <= _capacity || nextCapacity > 256 * 1024 * 1024)
                         return false;
 
+                    // Allocate first, then free: if allocation throws, _buffer is still valid and
+                    // Dispose will not free a dangling pointer.
+                    var newBuffer = Marshal.AllocHGlobal(nextCapacity);
                     Marshal.FreeHGlobal(_buffer);
+                    _buffer = newBuffer;
                     _capacity = nextCapacity;
-                    _buffer = Marshal.AllocHGlobal(_capacity);
                     continue;
                 }
 
@@ -366,9 +411,9 @@ internal static class Win32
                 if (pid > 0 && _requested.ContainsKey(pid))
                 {
                     var name = ReadUnicodeString(IntPtr.Add(entry, ProcessNameOffset));
-                    var workingSet = ReadSizeT(entry, WorkingSetOffset);
+                    var privateWorkingSet = ReadNonNegativeInt64(entry, PrivateWorkingSetOffset);
                     var createTime = Marshal.ReadInt64(entry, CreateTimeOffset);
-                    _requested[pid] = new ProcessSnapshot(name ?? string.Empty, workingSet, createTime);
+                    _requested[pid] = new ProcessSnapshot(name ?? string.Empty, privateWorkingSet, createTime);
                 }
 
                 if (nextOffset == 0 || nextOffset > (uint)(limit - offset))
@@ -378,7 +423,7 @@ internal static class Win32
             }
         }
 
-        private static long? ReadSizeT(nint entry, int offset)
+        private static long? ReadNonNegativeInt64(nint entry, int offset)
         {
             try
             {
@@ -424,12 +469,16 @@ internal static class Win32
     }
 }
 
-internal readonly record struct ProcessSnapshot(string Name, long? WorkingSetBytes, long CreateTime);
+/// <param name="PrivateWorkingSetBytes">
+/// The process's private working set (what Task Manager's Memory column shows), not the total
+/// working set, which also counts shared pages.
+/// </param>
+internal readonly record struct ProcessSnapshot(string Name, long? PrivateWorkingSetBytes, long CreateTime);
 
 internal readonly record struct GameInfo(
     int Pid,
     string Name,
-    long? WorkingSetBytes,
+    long? PrivateWorkingSetBytes,
     long CreateTime,
     RECT Monitor,
     nint WindowHandle,
@@ -438,12 +487,25 @@ internal readonly record struct GameInfo(
     bool IsWindowVisible,
     bool IsMinimized);
 
-internal static class GameDetector
+/// <summary>
+/// Finds the foreground game and keeps it up to date. The expensive process-table query is cached
+/// per (pid, window) so it only runs when the foreground window changes, or about once a second
+/// when a statistic that needs fresh process memory is enabled.
+/// </summary>
+internal sealed class GameDetector : IDisposable
 {
-    public static bool TryGet(
-        Win32.ProcessSnapshotTable snapshots,
-        bool includeWindowedGames,
-        out GameInfo game)
+    private static readonly long FreshTicks = Stopwatch.Frequency;
+    private static readonly long MaxCacheTicks = Stopwatch.Frequency * 30;
+
+    private readonly Win32.ProcessSnapshotTable _snapshots = new();
+
+    private nint _cachedHwnd;
+    private int _cachedPid;
+    private ProcessSnapshot _cachedProcess;
+    private long _cachedAt;
+    private long _trackedRefreshAt;
+
+    public bool TryGet(bool includeWindowedGames, bool needFreshWorkingSet, out GameInfo game)
     {
         game = default;
 
@@ -453,17 +515,17 @@ internal static class GameDetector
         if (pid <= 0 || pid == Environment.ProcessId)
             return false;
 
-        if (!snapshots.Refresh(pid, out var process))
+        if (!TryGetForegroundProcess(hwnd, pid, needFreshWorkingSet, out var process))
             return false;
 
-        var name = Path.GetFileNameWithoutExtension(process.Name);
+        var name = NormalizeExecutableName(process.Name);
         if (string.IsNullOrWhiteSpace(name) || IsExecutableBlacklisted(name))
             return false;
 
         game = new GameInfo(
             pid,
             name,
-            process.WorkingSetBytes,
+            process.PrivateWorkingSetBytes,
             process.CreateTime,
             monitor,
             hwnd,
@@ -474,35 +536,46 @@ internal static class GameDetector
         return true;
     }
 
-    public static bool TryRefreshTracked(
-        Win32.ProcessSnapshotTable snapshots,
-        GameInfo tracked,
-        out GameInfo game)
+    public bool TryRefreshTracked(GameInfo tracked, bool needFreshWorkingSet, out GameInfo game)
     {
         game = default;
 
-        if (!snapshots.Refresh(tracked.Pid, out var process))
-            return false;
+        var now = Stopwatch.GetTimestamp();
+        var current = tracked;
 
-        var name = Path.GetFileNameWithoutExtension(process.Name);
-        if (!string.Equals(name, tracked.Name, StringComparison.OrdinalIgnoreCase) ||
-            (tracked.CreateTime != 0 && process.CreateTime != 0 && process.CreateTime != tracked.CreateTime))
-            return false;
+        // While the game's window still exists the process is alive, so the process table only
+        // needs to be read when fresh memory numbers are wanted (about once a second) or when the
+        // window is gone and liveness has to be confirmed.
+        var windowAlive = Win32.IsWindowForProcess(tracked.WindowHandle, tracked.Pid);
+        var needSnapshot = !windowAlive || (needFreshWorkingSet && now - _trackedRefreshAt >= FreshTicks);
 
-        if (IsExecutableBlacklisted(name))
-            return false;
+        if (needSnapshot)
+        {
+            if (!_snapshots.Refresh(tracked.Pid, out var process))
+                return false;
 
-        var hwnd = tracked.WindowHandle;
-        Win32.TryGetMainWindowForProcess(tracked.Pid, hwnd, out var refreshedHwnd);
+            var name = NormalizeExecutableName(process.Name);
+            if (!string.Equals(name, tracked.Name, StringComparison.OrdinalIgnoreCase) ||
+                (tracked.CreateTime != 0 && process.CreateTime != 0 && process.CreateTime != tracked.CreateTime))
+                return false;
+
+            if (IsExecutableBlacklisted(name))
+                return false;
+
+            _trackedRefreshAt = now;
+            current = tracked with
+            {
+                Name = name,
+                PrivateWorkingSetBytes = process.PrivateWorkingSetBytes,
+                CreateTime = process.CreateTime,
+            };
+        }
+
+        var hwnd = current.WindowHandle;
+        Win32.TryGetMainWindowForProcess(current.Pid, hwnd, out var refreshedHwnd);
         hwnd = refreshedHwnd != 0 ? refreshedHwnd : hwnd;
 
-        return UpdateWindowState(tracked with
-        {
-            Name = name,
-            WorkingSetBytes = process.WorkingSetBytes,
-            CreateTime = process.CreateTime,
-            WindowHandle = hwnd,
-        }, out game);
+        return UpdateWindowState(current with { WindowHandle = hwnd }, out game);
     }
 
     public static bool TryRefreshTrackedWindowOnly(GameInfo tracked, out GameInfo game)
@@ -518,14 +591,47 @@ internal static class GameDetector
         return UpdateWindowState(tracked with { WindowHandle = hwnd }, out game);
     }
 
+    /// <summary>
+    /// Strips only a trailing ".exe". (Path.GetFileNameWithoutExtension would also cut names such
+    /// as "soffice.bin" or "Rocket.Chat" in the wrong place.)
+    /// </summary>
+    public static string NormalizeExecutableName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return string.Empty;
+
+        var trimmed = name.Trim();
+        return trimmed.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+            ? trimmed[..^4]
+            : trimmed;
+    }
+
     public static bool IsExecutableBlacklisted(string executableName)
     {
-        if (string.IsNullOrWhiteSpace(executableName))
+        var normalized = NormalizeExecutableName(executableName);
+        return normalized.Length > 0 && IgnoredApplications.ExecutableNames.Contains(normalized);
+    }
+
+    public void Dispose() => _snapshots.Dispose();
+
+    private bool TryGetForegroundProcess(nint hwnd, int pid, bool needFreshWorkingSet, out ProcessSnapshot process)
+    {
+        var now = Stopwatch.GetTimestamp();
+        var maxAge = needFreshWorkingSet ? FreshTicks : MaxCacheTicks;
+        if (hwnd == _cachedHwnd && pid == _cachedPid && now - _cachedAt < maxAge)
+        {
+            process = _cachedProcess;
+            return true;
+        }
+
+        if (!_snapshots.Refresh(pid, out process))
             return false;
 
-        var normalized = Path.GetFileNameWithoutExtension(executableName.Trim());
-        return !string.IsNullOrWhiteSpace(normalized)
-            && IgnoredApplications.ExecutableNames.Contains(normalized);
+        _cachedHwnd = hwnd;
+        _cachedPid = pid;
+        _cachedProcess = process;
+        _cachedAt = now;
+        return true;
     }
 
     private static bool UpdateWindowState(GameInfo tracked, out GameInfo game)
@@ -545,8 +651,10 @@ internal static class GameDetector
         }
 
         var isFullscreen = tracked.IsFullscreen;
-        if (Win32.GetWindowRect(hwnd, out var windowRect))
-            isFullscreen = CoversMonitor(windowRect, monitor);
+        if (Win32.TryGetClientAreaScreenRect(hwnd, out var clientRect))
+            isFullscreen = WindowGeometry.CoversMonitor(clientRect, monitor);
+        else if (Win32.GetWindowRect(hwnd, out var windowRect))
+            isFullscreen = WindowGeometry.CoversMonitor(windowRect, monitor);
 
         game = tracked with
         {
@@ -558,10 +666,4 @@ internal static class GameDetector
         };
         return true;
     }
-
-    private static bool CoversMonitor(RECT window, RECT monitor) =>
-        window.Left <= monitor.Left &&
-        window.Top <= monitor.Top &&
-        window.Right >= monitor.Right &&
-        window.Bottom >= monitor.Bottom;
 }

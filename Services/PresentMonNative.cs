@@ -401,8 +401,6 @@ internal static class PresentMonNative
     {
         var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        Add(paths, Path.Combine(AppContext.BaseDirectory, "PresentMonAPI2.dll"));
-
         var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
         var programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
 
@@ -415,6 +413,10 @@ internal static class PresentMonNative
             Add(paths, Path.Combine(root, "Intel", "PresentMon", "PresentMonAPI2.dll"));
             Add(paths, Path.Combine(root, "Intel", "PresentMon", "SDK", "PresentMonAPI2.dll"));
         }
+
+        // The app folder comes last: Velopack installs into a user-writable directory, so a copy
+        // there must never win over the installed, admin-protected PresentMon service files.
+        Add(paths, Path.Combine(AppContext.BaseDirectory, "PresentMonAPI2.dll"));
 
         return paths;
     }

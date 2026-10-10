@@ -3,8 +3,10 @@ namespace Clockwork.Overlay;
 /// <summary>
 /// Common Windows applications for which a performance overlay is not useful.
 /// Matching is intentionally by executable name so installs and updates do not
-/// change the built-in blacklist. This list is fixed in the application and is
-/// not user-editable.
+/// change the built-in blacklist. Names are compared without a trailing ".exe"
+/// (see GameDetector.NormalizeExecutableName), so entries must not include it.
+/// Very generic single-word names that real games could plausibly use were removed.
+/// This list is fixed in the application and is not user-editable.
 /// </summary>
 internal static class IgnoredApplications
 {
@@ -17,20 +19,20 @@ internal static class IgnoredApplications
         "Taskmgr", "mmc", "control", "rundll32", "regedit", "msconfig", "msinfo32", "dxdiag",
         "perfmon", "resmon", "eventvwr", "compmgmt", "services", "taskschd", "devmgmt", "diskmgmt",
         "cleanmgr", "winver", "charmap", "osk", "Magnify", "Narrator", "mobsync", "optionalfeatures",
-        "lusrmgr", "gpedit", "secpol", "wf", "wusa", "sethc", "utilman", "spoolsv", "PrintIsolationHost",
+        "lusrmgr", "gpedit", "secpol", "wusa", "sethc", "utilman", "spoolsv", "PrintIsolationHost",
         "DisplaySwitch", "dccw", "ctfmon", "fontview", "ComputerDefaults", "CredUIHost",
-        "UserOOBEBroker", "oobe", "msdt", "HelpPane", "FirstLogonAnim", "WinStore.App", "WinStore.App.exe",
+        "UserOOBEBroker", "oobe", "msdt", "HelpPane", "FirstLogonAnim", "WinStore.App", 
 
         // AI / Desktop Assistants / LLM wrappers
-        "Gemini", "ChatGPT", "Claude", "Copilot", "Perplexity", "DeepSeek", "Poe", "LM Studio",
-        "Jan", "Ollama", "Chatbox", "TypingMind", "msty", "AnythingLLM", "LocalAI",
+        "Gemini", "ChatGPT", "Claude", "Copilot", "Perplexity", "DeepSeek", "LM Studio",
+        "Ollama", "Chatbox", "TypingMind", "msty", "AnythingLLM", "LocalAI",
 
         // File managers / archive tools / viewers
         "7zFM", "WinRAR", "UnRAR", "peazip", "Bandizip", "Everything", "EverythingToolbar",
-        "Q-Dir", "DirectoryOpus", "xyplorer", "freecommander", "totalcmd", "tc", "Files",
-        "OneCommander", "explorerpp", "MultiCommander", "doublecmd", "Clover", "OpenShell",
+        "Q-Dir", "DirectoryOpus", "xyplorer", "freecommander", "totalcmd", "Files",
+        "OneCommander", "explorerpp", "MultiCommander", "doublecmd", "OpenShell",
         "irfanview", "i_view32", "xnview", "xnviewmp", "nomacs", "ImageGlass", "Honeyview",
-        "FastStoneImageViewer", "ACDSee", "qimgv", "JPEGView", "Imagine", "gwenview",
+        "FastStoneImageViewer", "ACDSee", "qimgv", "JPEGView", "gwenview",
         "sumatrapdf", "AcroRd32", "Acrobat", "FoxitReader", "FoxitPDFReader", "PDFXEdit",
 
         // Web browsers / browser shells
@@ -38,7 +40,7 @@ internal static class IgnoredApplications
         "waterfox", "waterfoxclassic", "brave", "brave_crash_handler", "msedge", "msedgewebview2",
         "opera", "opera_gx", "opera_autoupdate", "vivaldi", "vivaldi_crash_handler", "yandex",
         "yandexbrowser", "palemoon", "floorp", "thorium", "ungoogled-chromium", "chromium",
-        "arc", "zen", "sidekick", "maxthon", "avastbrowser", "epicwebbrowser", "comodo_dragon",
+        "sidekick", "maxthon", "avastbrowser", "epicwebbrowser", "comodo_dragon",
         "iridium", "centbrowser", "srware_iron", "duckduckgo", "startpageshell",
 
         // Messaging / collaboration / social apps
@@ -46,8 +48,8 @@ internal static class IgnoredApplications
         "Skype", "SkypeApp", "Zoom", "Webex", "CiscoCollabHost", "WhatsApp", "WhatsAppBeta",
         "Telegram", "Signal", "Element", "ElementCall", "Viber", "LINE", "LineLauncher",
         "WeChat", "WeChatApp", "ICQ", "thunderbird", "Mailbird", "eMClient", "Outlook",
-        "Mattermost", "Rocket.Chat", "Ferdium", "Rambox", "Franz", "Station", "Wavebox",
-        "FacebookMessenger", "Instagram", "Messenger", "Reddit", "X", "Twitter", "Threads",
+        "Mattermost", "Rocket.Chat", "Ferdium", "Rambox", "Franz", "Wavebox",
+        "FacebookMessenger", "Instagram", "Messenger", "Reddit", "Twitter", "Threads",
 
         // Media players / music / streaming clients
         "vlc", "vlc-cache-gen", "mpv", "mpvnet", "mpc-hc", "mpc-hc64", "mpc-be", "mpc-be64",
@@ -55,11 +57,11 @@ internal static class IgnoredApplications
         "foobar2000", "MusicBee", "AIMP", "Winamp", "Audacious", "Clementine", "DeaDBeeF",
         "Spotify", "SpotifyWebHelper", "TIDAL", "Deezer", "Pandora", "AmazonMusic", "AppleMusic",
         "YouTubeMusic", "MediaMonkey", "JRiver", "plex", "Plexamp", "Jellyfin", "Emby",
-        "Netflix", "PrimeVideo", "DisneyPlus", "Max", "Hulu", "Peacock", "ParamountPlus",
+        "Netflix", "PrimeVideo", "DisneyPlus", "Hulu", "Peacock", "ParamountPlus",
 
         // Game launchers / storefronts / publisher clients (not games themselves)
         "steam", "steamwebhelper", "SteamService", "EpicGamesLauncher", "EpicWebHelper",
-        "Battle.net", "Agent", "BlizzardUpdateAgent", "UbisoftConnect", "upc", "Uplay",
+        "Battle.net", "BlizzardUpdateAgent", "UbisoftConnect", "upc", "Uplay",
         "EA", "EADesktop", "EALauncher", "Origin", "OriginWebHelperService", "GalaxyClient",
         "GOGGalaxy", "GogGalaxyCommunication", "RockstarGamesLauncher", "RockstarService",
         "LauncherPatcher", "BethesdaNetLauncher", "2KLauncher", "Paradox Launcher",
@@ -74,7 +76,7 @@ internal static class IgnoredApplications
         "obs64", "obs32", "Streamlabs", "slobs", "XSplit", "XSplitBroadcaster", "XSplitCore",
         "LightstreamStudio", "vMix", "Wirecast", "PRISMLiveStudio", "NVIDIA Broadcast", "NVBroadcastContainer",
         "ShareX", "Greenshot", "SnippingTool", "ScreenClippingHost", "Snipaste", "Flameshot",
-        "Bandicam", "bdcam", "Fraps", "GameRecorder", "Action", "MirillisAction", "Dxtory",
+        "Bandicam", "bdcam", "Fraps", "GameRecorder", "MirillisAction", "Dxtory",
         "ReLive", "RadeonSoftwareSlimmer", "InstantReplay",
 
         // Office / productivity / document applications
@@ -83,7 +85,7 @@ internal static class IgnoredApplications
         "smath", "OpenOffice", "LibreOffice", "notepad", "Notepad3", "Notepad++", "wordpad",
         "write", "mspaint", "calc", "sticky notes", "StikyNot", "TeamsClassic",
         "Notion", "Evernote", "Obsidian", "Logseq", "Joplin", "StandardNotes",
-        "Todoist", "ticktick", "Trello", "Asana", "ClickUp", "Monday", "Linear",
+        "Todoist", "ticktick", "Trello", "Asana", "ClickUp", 
         "FoxitPDFEditor", "drawboard", "Kindle", "Calibre", "Zotero", "Mendeley",
 
         // Developer tools / terminals / IDEs
@@ -91,8 +93,8 @@ internal static class IgnoredApplications
         "code", "Code - Insiders", "cursor", "Windsurf", "sublime_text",
         "sublime_text_4", "rider64", "rider", "idea64", "clion64", "webstorm64",
         "pycharm64", "pycharm", "goland64", "goland", "phpstorm64", "rubymine64", "datagrip64",
-        "appcode", "resharper", "devenv.exe", "eclipse", "eclipse-workspace", "qtcreator", "qcreator",
-        "android-studio", "studio64", "studio", "xamarin", "UnityHub", "Godot",
+        "appcode", "resharper", "eclipse", "eclipse-workspace", "qtcreator", "qcreator",
+        "android-studio", "studio64", "xamarin", "UnityHub", "Godot",
         "Godot_v4", "GameMakerStudio", "GameMaker", "Blender", "maya", "houdini", "Cinema4D",
         "3dsmax", "SketchUp", "Fusion360", "FreeCAD", "FreeCADCmd", "solidworks",
         "terminal", "wt", "WindowsTerminal", "OpenConsole", "conhost", "cmd", "powershell",
@@ -100,7 +102,7 @@ internal static class IgnoredApplications
         "cmder", "alacritty", "wezterm", "kitty", "WindowsPowerShell", "ubuntu", "ubuntu2204",
         "ubuntu2404", "debian", "kali", "wsl", "wslhost", "wslservice", "docker", "Docker Desktop",
         "com.docker.backend", "com.docker.proxy", "podman", "Podman Desktop", "rancher-desktop",
-        "kubernetes-dashboard", "minikube", "kind", "vagrant", "vagrant-vmware-utility",
+        "kubernetes-dashboard", "minikube", "vagrant", "vagrant-vmware-utility",
 
         // Remote desktop / remote access / VM clients
         "mstsc", "msrdc", "RemoteDesktop", "TeamViewer", "tv_w32", "tv_x64", "AnyDesk",
@@ -123,7 +125,7 @@ internal static class IgnoredApplications
 
         // Cloud storage / sync clients
         "OneDrive", "Dropbox", "GoogleDriveFS", "drivefs", "iCloudDrive", "iCloudDriveFS",
-        "Box", "BoxDrive", "MegaClient", "MEGAsync", "pCloud", "Sync", "SyncTrayzor", "Syncthing",
+        "BoxDrive", "MegaClient", "MEGAsync", "pCloud", "SyncTrayzor", "Syncthing",
         "Nextcloud", "ownCloud", "AmazonDrive", "Tresorit",
 
         // Creative / design / audio production applications
@@ -131,7 +133,7 @@ internal static class IgnoredApplications
         "Premiere", "MediaEncoder", "Animate", "Audition", "Lightroom", "LightroomClassic",
         "AcrobatDistiller", "CorelDRW", "CorelDRAW", "PaintToolSAI", "SAI", "krita", "GIMP",
         "Inkscape", "Affinity", "AffinityPhoto", "AffinityDesigner", "AffinityPublisher", "DaVinciResolve",
-        "Resolve", "Ableton Live", "AbletonLive", "FLStudio", "FL Studio", "Studio One", "REAPER", "Cakewalk", "Cubase", "ProTools", "nuendo", "reason", "BitwigStudio", "LMMS",
+        "Resolve", "Ableton Live", "AbletonLive", "FLStudio", "FL Studio", "Studio One", "REAPER", "Cakewalk", "Cubase", "ProTools", "nuendo", "BitwigStudio", "LMMS",
 
         // Security / endpoint / admin applications
         "msmpeng", "SecurityHealthSystray", "SecurityHealthService", "WindowsDefender",
@@ -143,14 +145,14 @@ internal static class IgnoredApplications
 
         // Update / installer / maintenance shells
         "wuauclt", "UsoClient", "MoUsoCoreWorker", "TiWorker", "TrustedInstaller", "WindowsUpdateBox",
-        "setup", "setuphost", "install", "installer", "unins000", "updater", "update",
+        "setup", "setuphost", "installer", "unins000", "updater", 
         "AdobeARMservice", "GoogleUpdater", "GoogleUpdate", "MicrosoftEdgeUpdate", "OneDriveSetup",
         "DropboxUpdate", "SpotifyUpdate", "SteamUpdate", "EpicGamesLauncherUpdate",
 
         // OCR / screen / accessibility / utility front ends
         "PowerToys", "PowerToysSettings", "PowerToysRun", "FancyZones", "FlowLauncher", "Wox",
         "Everything64", "Everything32", "Listary", "Ditto", "AutoHotkey", "AutoHotkeyU64",
-        "DisplayFusion", "ActualMultipleMonitors", "f.lux", "Flux", "TwinkleTray", "Lively",
+        "DisplayFusion", "ActualMultipleMonitors", "f.lux", "TwinkleTray", "Lively",
         "WallpaperEngine", "wallpaper32", "Rainmeter", "TranslucentTB", "EarTrumpet", "StartAllBack",
         "Start11", "Open-Shell", "TaskbarX", "ExplorerPatcher",
     };

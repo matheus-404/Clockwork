@@ -1,86 +1,130 @@
-using Clockwork.Services;
+using System.Globalization;
 
 namespace Clockwork.Overlay;
 
-/// <summary>Turns sampled telemetry into the text shown by each overlay line.</summary>
+/// <summary>
+/// Turns values into the text shown on the overlay. Everything uses the invariant culture so the
+/// overlay looks the same on every machine ("12.3 ms", never "12,3 ms").
+/// </summary>
 internal static class OverlayStatFormatter
 {
-    private const string NotAvailable = "N/A";
+    public const string NotAvailable = "N/A";
 
-    internal static string Format(
-        string stat,
-        GameInfo game,
-        PresentMonSnapshot snapshot,
-        (double usedGb, double totalGb, double percent)? ram,
-        DateTime systemTime,
-        TimeSpan sessionElapsed,
-        Func<PresentMonNative.PM_METRIC, string?> metricStatus)
+    public static string FormatNumber(double value, int decimals, string unit) =>
+        string.Concat(value.ToString(decimals <= 0 ? "0" : "0.0", CultureInfo.InvariantCulture), unit);
+
+    public static string FormatFlag(double value) => value != 0 ? "Yes" : "No";
+
+    /// <summary>Formats whole seconds as HH:mm:ss (hours are not capped at 24).</summary>
+    public static string FormatPlaytime(long totalSeconds)
     {
-        string Num(double? value, string format, string unit) =>
-            value is { } v && double.IsFinite(v) ? v.ToString(format) + unit : NotAvailable;
-        string Flag(double? value) =>
-            value is { } v && double.IsFinite(v) ? (v != 0 ? "Yes" : "No") : NotAvailable;
-        string PresentMonValue(double? value, PresentMonNative.PM_METRIC metric, string format, string unit) =>
-            value is { } v && double.IsFinite(v) ? v.ToString(format) + unit : metricStatus(metric) ?? NotAvailable;
-        string PresentMonFlag(double? value, PresentMonNative.PM_METRIC metric) =>
-            value is { } v && double.IsFinite(v) ? (v != 0 ? "Yes" : "No") : metricStatus(metric) ?? NotAvailable;
+        if (totalSeconds < 0)
+            totalSeconds = 0;
 
-        return stat switch
-        {
-            "FPS" => Num(snapshot.Fps, "0", ""),
-            "Avg FPS" => Num(snapshot.AvgFps, "0", ""),
-            "1% Low FPS" => Num(snapshot.Low1Fps, "0", ""),
-            "0.1% Low FPS" => Num(snapshot.Low01Fps, "0", ""),
-            "Frame Time" => Num(snapshot.FrameTimeMs, "0.0", " ms"),
-            "Dropped Frames" => Flag(snapshot.DroppedFrames),
-            "Presented FPS" => Num(snapshot.PresentedFps, "0", ""),
-            "Displayed FPS" => Num(snapshot.DisplayedFps, "0", ""),
-            "Application FPS" => Num(snapshot.ApplicationFps, "0", ""),
-
-            "CPU Usage" => Num(snapshot.CpuUsagePercent, "0", "%"),
-            "CPU Busy" => Num(snapshot.CpuBusyMs, "0.0", " ms"),
-            "CPU Wait" => Num(snapshot.CpuWaitMs, "0.0", " ms"),
-            "CPU Frame Time" => Num(snapshot.CpuFrameTimeMs, "0.0", " ms"),
-
-            "GPU Temperature" => Num(snapshot.GpuTemperatureC, "0", "°C"),
-            "GPU Core Clock Frequency" => Num(snapshot.GpuCoreClockMHz, "0", " MHz"),
-            "GPU Memory Clock Frequency" => Num(snapshot.GpuMemoryClockMHz, "0", " MHz"),
-            "GPU VRAM Usage" => Num(snapshot.GpuVramUsedMb, "0", " MB"),
-            "VRAM Usage (%)" => Num(snapshot.GpuVramUsagePercent, "0", "%"),
-            "GPU Power" => Num(snapshot.GpuPowerWatts, "0", " W"),
-            "GPU Usage" => Num(snapshot.GpuUsagePercent, "0", "%"),
-            "GPU Render/Compute Utilization" => PresentMonValue(snapshot.GpuRenderComputeUsagePercent, PresentMonNative.PM_METRIC.GPU_RENDER_COMPUTE_UTILIZATION, "0", "%"),
-            "GPU Power Limited" => PresentMonFlag(snapshot.GpuPowerLimited, PresentMonNative.PM_METRIC.GPU_POWER_LIMITED),
-            "GPU Temperature Limited" => PresentMonFlag(snapshot.GpuTemperatureLimited, PresentMonNative.PM_METRIC.GPU_TEMPERATURE_LIMITED),
-            "GPU Current Limited" => PresentMonFlag(snapshot.GpuCurrentLimited, PresentMonNative.PM_METRIC.GPU_CURRENT_LIMITED),
-            "GPU Voltage Limited" => PresentMonFlag(snapshot.GpuVoltageLimited, PresentMonNative.PM_METRIC.GPU_VOLTAGE_LIMITED),
-            "GPU Utilization Limited" => PresentMonFlag(snapshot.GpuUtilizationLimited, PresentMonNative.PM_METRIC.GPU_UTILIZATION_LIMITED),
-            "GPU Busy" => Num(snapshot.GpuBusyMs, "0.0", " ms"),
-            "GPU Wait" => Num(snapshot.GpuWaitMs, "0.0", " ms"),
-            "GPU Time" => Num(snapshot.GpuTimeMs, "0.0", " ms"),
-            "GPU Latency" => Num(snapshot.GpuLatencyMs, "0.0", " ms"),
-
-            "Display Latency" => Num(snapshot.DisplayLatencyMs, "0.0", " ms"),
-            "Render/Present Latency" => Num(snapshot.RenderPresentLatencyMs, "0.0", " ms"),
-            "Time Until Displayed" => Num(snapshot.UntilDisplayedMs, "0.0", " ms"),
-            "Between Presents" => Num(snapshot.BetweenPresentsMs, "0.0", " ms"),
-            "Between Display Changes" => Num(snapshot.BetweenDisplayChangeMs, "0.0", " ms"),
-            "Click-to-Photon Latency" => Num(snapshot.ClickToPhotonLatencyMs, "0.0", " ms"),
-            "All Input-to-Photon Latency" => Num(snapshot.AllInputToPhotonLatencyMs, "0.0", " ms"),
-
-            "RAM Usage" => ram is { } memory ? $"{memory.usedGb:0.0} / {memory.totalGb:0.0} GB" : NotAvailable,
-            "RAM Usage (%)" => ram is { } memory ? $"{memory.percent:0}%" : NotAvailable,
-            "Process/Game RAM Usage" => game.WorkingSetBytes is { } bytes ? $"{bytes / 1073741824.0:0.0} GB" : NotAvailable,
-
-            "System Time" => systemTime.ToString("HH:mm"),
-            "Session Playtime" => FormatPlaytime(sessionElapsed),
-            _ => NotAvailable,
-        };
+        var hours = totalSeconds / 3600;
+        var minutes = totalSeconds / 60 % 60;
+        var seconds = totalSeconds % 60;
+        return string.Create(CultureInfo.InvariantCulture, $"{hours:00}:{minutes:00}:{seconds:00}");
     }
 
-    private static string FormatPlaytime(TimeSpan elapsed)
+    /// <summary>Formats minutes since midnight as HH:mm.</summary>
+    public static string FormatClock(long minutesOfDay) =>
+        string.Create(CultureInfo.InvariantCulture, $"{minutesOfDay / 60 % 24:00}:{minutesOfDay % 60:00}");
+
+    public static string FormatRam(double usedGb, double totalGb) =>
+        string.Create(CultureInfo.InvariantCulture, $"{usedGb:0.0} / {totalGb:0.0} GB");
+
+    public static string FormatPercent(long percent) =>
+        string.Create(CultureInfo.InvariantCulture, $"{percent}%");
+
+    /// <summary>Formats a size given in tenths of a gigabyte.</summary>
+    public static string FormatTenthsOfGb(long tenths) =>
+        string.Create(CultureInfo.InvariantCulture, $"{tenths / 10.0:0.0} GB");
+}
+
+/// <summary>
+/// Tracks the last value shown for one overlay line so unchanged values are never re-formatted or
+/// re-posted to the UI thread. A slot belongs to exactly one worker loop, so it needs no locking.
+/// </summary>
+internal sealed class StatSlot
+{
+    private bool _hasNumber;
+    private double _lastNumber;
+    private bool _hasKey;
+    private long _lastKey;
+    private string? _lastText;
+
+    public StatSlot(StatDefinition definition) => Definition = definition;
+
+    public StatDefinition Definition { get; }
+
+    public string Label => Definition.Label;
+
+    /// <summary>
+    /// Updates a numeric statistic. The value is rounded to the displayed precision first, so a
+    /// change smaller than what would be visible does not count as a change.
+    /// </summary>
+    public bool TryUpdateNumber(double? value, string? status, out string text)
     {
-        var totalHours = (long)elapsed.TotalHours;
-        return $"{totalHours:00}:{elapsed.Minutes:00}:{elapsed.Seconds:00}";
+        if (value is { } v && double.IsFinite(v))
+        {
+            var rounded = Math.Round(v, Definition.Decimals, MidpointRounding.AwayFromZero);
+            if (rounded == 0)
+                rounded = 0; // normalise negative zero so it never prints as "-0"
+
+            if (_hasNumber && rounded == _lastNumber)
+            {
+                text = string.Empty;
+                return false;
+            }
+
+            _hasNumber = true;
+            _hasKey = false;
+            _lastNumber = rounded;
+            text = _lastText = OverlayStatFormatter.FormatNumber(rounded, Definition.Decimals, Definition.Unit);
+            return true;
+        }
+
+        return TryUpdateText(status ?? OverlayStatFormatter.NotAvailable, out text);
+    }
+
+    /// <summary>Updates a Yes/No statistic.</summary>
+    public bool TryUpdateFlag(double? value, string? status, out string text) =>
+        TryUpdateText(
+            value is { } v && double.IsFinite(v)
+                ? OverlayStatFormatter.FormatFlag(v)
+                : status ?? OverlayStatFormatter.NotAvailable,
+            out text);
+
+    /// <summary>Updates a statistic whose displayed value is fully determined by an integer key.</summary>
+    public bool TryUpdateKeyed(long key, Func<long, string> format, out string text)
+    {
+        if (_hasKey && key == _lastKey)
+        {
+            text = string.Empty;
+            return false;
+        }
+
+        _hasKey = true;
+        _hasNumber = false;
+        _lastKey = key;
+        text = _lastText = format(key);
+        return true;
+    }
+
+    /// <summary>Updates a statistic by comparing the formatted text itself.</summary>
+    public bool TryUpdateText(string candidate, out string text)
+    {
+        _hasNumber = false;
+        _hasKey = false;
+
+        if (string.Equals(_lastText, candidate, StringComparison.Ordinal))
+        {
+            text = string.Empty;
+            return false;
+        }
+
+        text = _lastText = candidate;
+        return true;
     }
 }

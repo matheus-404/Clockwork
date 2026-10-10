@@ -41,7 +41,12 @@ public partial class App : Application
             {
                 if (Interlocked.CompareExchange(ref _isInitialized, 1, 0) == 0)
                 {
-                    _ = InitializeClockworkAsync(vm, mainWindow, _startupCts.Token);
+                    // The overlay starts right away. It copes with PresentMon being missing (it
+                    // retries with a backoff), so a slow download, an unanswered administrator
+                    // prompt or an open message box can never delay or block it.
+                    _overlay = new OverlayController(vm);
+
+                    _ = InitializeClockworkAsync(mainWindow, _startupCts.Token);
                 }
             };
 
@@ -78,7 +83,6 @@ public partial class App : Application
     }
 
     private async Task InitializeClockworkAsync(
-        MainWindowViewModel vm,
         MainWindow mainWindow,
         CancellationToken cancellationToken)
     {
@@ -155,8 +159,10 @@ public partial class App : Application
                     }
                 }
 
-                if (!cancellationToken.IsCancellationRequested)
-                    _overlay = new OverlayController(vm, mainWindow);
+                // PresentMon may have just been installed or updated: let the overlay reconnect now.
+                if (!cancellationToken.IsCancellationRequested &&
+                    result.Status is PresentMonStartupStatus.Installed or PresentMonStartupStatus.Updated)
+                    _overlay?.NotifyPresentMonChanged();
             });
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -177,9 +183,6 @@ public partial class App : Application
                         "but performance monitoring may be unavailable until PresentMon is installed.\n\n" +
                         ex.Message);
                 }
-
-                if (!cancellationToken.IsCancellationRequested)
-                    _overlay = new OverlayController(vm, mainWindow);
             });
         }
     }

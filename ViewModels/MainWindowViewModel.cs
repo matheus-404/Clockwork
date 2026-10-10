@@ -1,4 +1,5 @@
 using Avalonia.Threading;
+using Clockwork.Overlay;
 using Clockwork.Services;
 
 namespace Clockwork.ViewModels;
@@ -24,85 +25,21 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     public MainWindowViewModel()
     {
-        Sections =
-        [
-            new SectionViewModel("Performance", Icon("Pulse.svg"),
-                "Select which performance information you want to display in-game.",
-            [
-                new OptionViewModel("FPS", Icon("Monitor.svg"), isOn: true),
-                new OptionViewModel("Avg FPS", Icon("Pulse.svg")),
-                new OptionViewModel("1% Low FPS", Icon("Pulse.svg")),
-                new OptionViewModel("0.1% Low FPS", Icon("Pulse.svg")),
-                new OptionViewModel("Frame Time", Icon("Clock.svg")),
-                new OptionViewModel("Dropped Frames", Icon("Pulse.svg")),
-                new OptionViewModel("Presented FPS", Icon("Monitor.svg")),
-                new OptionViewModel("Displayed FPS", Icon("Monitor.svg")),
-                new OptionViewModel("Application FPS", Icon("Monitor.svg")),
-            ]),
+        var sections = new List<SectionViewModel>();
+        foreach (var definition in StatRegistry.Sections)
+        {
+            var options = definition.Stats
+                .Select(stat => new OptionViewModel(stat, Icon(stat.IconFile), stat.DefaultOn))
+                .ToArray();
+            sections.Add(new SectionViewModel(definition.Name, Icon(definition.IconFile), definition.Description, options));
+        }
 
-            new SectionViewModel("CPU", Icon("CPU.svg"),
-                "Select which CPU information you want to display in-game.",
-            [
-                new OptionViewModel("CPU Usage", Icon("Pulse.svg")),
-                new OptionViewModel("CPU Busy", Icon("Clock.svg")),
-                new OptionViewModel("CPU Wait", Icon("Clock.svg")),
-                new OptionViewModel("CPU Frame Time", Icon("Clock.svg")),
-            ]),
+        sections.Add(new SectionViewModel("Overlay", Icon("Target.svg"),
+            "Choose where the overlay appears and how large it should be.",
+            [],
+            isOverlaySettings: true));
 
-            new SectionViewModel("GPU", Icon("GPU.svg"),
-                "Select which GPU information you want to display in-game.",
-            [
-                new OptionViewModel("GPU Temperature", Icon("Thermometer.svg")),
-                new OptionViewModel("GPU Core Clock Frequency", Icon("Gauge.svg")),
-                new OptionViewModel("GPU Memory Clock Frequency", Icon("Gauge.svg")),
-                new OptionViewModel("GPU VRAM Usage", Icon("RAM.svg")),
-                new OptionViewModel("VRAM Usage (%)", Icon("Percent.svg")),
-                new OptionViewModel("GPU Power", Icon("Plug.svg")),
-                new OptionViewModel("GPU Usage", Icon("Pulse.svg")),
-                new OptionViewModel("GPU Render/Compute Utilization", Icon("Pulse.svg")),
-                new OptionViewModel("GPU Power Limited", Icon("Pulse.svg")),
-                new OptionViewModel("GPU Temperature Limited", Icon("Thermometer.svg")),
-                new OptionViewModel("GPU Current Limited", Icon("Pulse.svg")),
-                new OptionViewModel("GPU Voltage Limited", Icon("Pulse.svg")),
-                new OptionViewModel("GPU Utilization Limited", Icon("Pulse.svg")),
-                new OptionViewModel("GPU Busy", Icon("Clock.svg")),
-                new OptionViewModel("GPU Wait", Icon("Clock.svg")),
-                new OptionViewModel("GPU Time", Icon("Clock.svg")),
-            ]),
-
-            new SectionViewModel("RAM", Icon("RAM.svg"),
-                "Select which RAM information you want to display in-game.",
-            [
-                new OptionViewModel("RAM Usage", Icon("RAM.svg")),
-                new OptionViewModel("RAM Usage (%)", Icon("Percent.svg")),
-                new OptionViewModel("Process/Game RAM Usage", Icon("Monitor.svg")),
-            ]),
-
-            new SectionViewModel("Latency", Icon("Clock.svg"),
-                "Select which latency information you want to display in-game.",
-            [
-                new OptionViewModel("GPU Latency", Icon("Clock.svg")),
-                new OptionViewModel("Display Latency", Icon("Clock.svg")),
-                new OptionViewModel("Render/Present Latency", Icon("Clock.svg")),
-                new OptionViewModel("Time Until Displayed", Icon("Clock.svg")),
-                new OptionViewModel("Between Presents", Icon("Clock.svg")),
-                new OptionViewModel("Between Display Changes", Icon("Clock.svg")),
-                new OptionViewModel("Click-to-Photon Latency", Icon("Clock.svg")),
-                new OptionViewModel("All Input-to-Photon Latency", Icon("Clock.svg")),
-            ]),
-
-            new SectionViewModel("More", Icon("More.svg"),
-                "Select which additional information you want to display in-game.",
-            [
-                new OptionViewModel("System Time", Icon("Clock.svg")),
-                new OptionViewModel("Session Playtime", Icon("Timer.svg")),
-            ]),
-
-            new SectionViewModel("Overlay", Icon("Target.svg"),
-                "Choose where the overlay appears and how large it should be.",
-                [],
-                isOverlaySettings: true),
-        ];
+        Sections = sections;
 
         _selectedSection = Sections[0];
 
@@ -118,7 +55,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             foreach (var option in section.Options)
             {
-                if (loaded.OptionStates.TryGetValue(GetOptionKey(section, option), out var isOn))
+                // Prefers the stable key and falls back to the "Section/Label" key older versions
+                // wrote, so existing settings carry over. The next save writes stable keys only.
+                if (StatRegistry.TryResolveSavedState(loaded.OptionStates, option.Stat, out var isOn))
                     option.IsOn = isOn;
             }
         }
@@ -250,7 +189,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             foreach (var section in Sections)
             {
                 foreach (var option in section.Options)
-                    option.IsOn = section.Name == "Performance" && option.Name == "FPS";
+                    option.IsOn = option.Stat.DefaultOn;
             }
         }
         finally
@@ -289,7 +228,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         _settings.Save(
             Sections.SelectMany(section => section.Options.Select(option =>
-                (GetOptionKey(section, option), option.IsOn))),
+                (option.Stat.Key, option.IsOn))),
             OverlayPositionX,
             OverlayPositionY,
             OverlayScale,
@@ -298,9 +237,6 @@ public sealed class MainWindowViewModel : ViewModelBase
             IncludeWindowedGames);
         _savePending = false;
     }
-
-    private static string GetOptionKey(SectionViewModel section, OptionViewModel option) =>
-        $"{section.Name}/{option.Name}";
 
     private static double ClampPosition(double value) =>
         double.IsFinite(value) ? Math.Clamp(value, 0.0, 100.0) : 0.0;

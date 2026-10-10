@@ -337,7 +337,7 @@
                                  Foreground="#FFFFFF"
                                  FontFamily="Consolas,Cascadia Mono,monospace"
                                  FontSize="11" FontWeight="SemiBold" />
-                      <TextBlock x:Name="PreviewOverlayLabel" Text="32°C   5182 MHz"
+                      <TextBlock x:Name="PreviewOverlayLabel" Text="CPU 38%   GPU 71%"
                                  Foreground="#33D6FF"
                                  FontFamily="Consolas,Cascadia Mono,monospace"
                                  FontSize="8" />

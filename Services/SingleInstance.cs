@@ -11,6 +11,7 @@ internal sealed class SingleInstance : IDisposable
     private readonly Mutex _mutex;
     private readonly EventWaitHandle _showEvent;
     private readonly CancellationTokenSource _cts = new();
+    private Thread? _listener;
 
     private SingleInstance(Mutex mutex, EventWaitHandle showEvent)
     {
@@ -70,7 +71,7 @@ internal sealed class SingleInstance : IDisposable
     {
         var handles = new WaitHandle[] { _showEvent, _cts.Token.WaitHandle };
 
-        new Thread(() =>
+        _listener = new Thread(() =>
         {
             while (WaitHandle.WaitAny(handles) == 0)
                 onActivate();
@@ -78,12 +79,17 @@ internal sealed class SingleInstance : IDisposable
         {
             IsBackground = true,
             Name = "Clockwork single-instance listener",
-        }.Start();
+        };
+        _listener.Start();
     }
 
     public void Dispose()
     {
         _cts.Cancel();
+
+        // Let the listener leave WaitAny before the handles it waits on are disposed.
+        try { _listener?.Join(TimeSpan.FromSeconds(1)); }
+        catch (ThreadStateException) { }
 
         try { _mutex.ReleaseMutex(); }
         catch (ApplicationException) { }
