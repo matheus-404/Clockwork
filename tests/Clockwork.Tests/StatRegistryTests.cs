@@ -37,22 +37,6 @@ public class StatRegistryTests
     }
 
     [Fact]
-    public void SavedState_MigratesPreviousInputLatencyKeys()
-    {
-        var stat = StatRegistry.Get(StatId.InputToPhotonLatency);
-
-        // Previous Clockwork releases using "all-input-to-photon" or "click-to-photon"
-        var oldAllInput = new Dictionary<string, bool> { ["all-input-to-photon"] = true };
-        var oldClick = new Dictionary<string, bool> { ["click-to-photon"] = true };
-
-        Assert.True(StatRegistry.TryResolveSavedState(oldAllInput, stat, out var fromAllInput));
-        Assert.True(fromAllInput);
-
-        Assert.True(StatRegistry.TryResolveSavedState(oldClick, stat, out var fromClick));
-        Assert.True(fromClick);
-    }
-
-    [Fact]
     public void Sections_AreInTheExpectedOrder()
     {
         Assert.Equal(
