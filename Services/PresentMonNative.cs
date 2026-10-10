@@ -228,6 +228,9 @@ internal static class PresentMonNative
         public PM_METRIC_TYPE type;
         public PM_UNIT unit;
         public PM_UNIT preferredUnitHint;
+        public IntPtr pName;
+        public IntPtr pShortName;
+        public IntPtr pDescription;
         public IntPtr pTypeInfo;
         public IntPtr pStatInfo;
         public IntPtr pDeviceMetricInfo;

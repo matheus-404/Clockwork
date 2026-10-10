@@ -352,19 +352,19 @@ public sealed class PresentMonMonitor : IDisposable
         StatId.CpuWait => GetValue(MetricKey.CpuWait, now),
         StatId.CpuFrameTime => GetValue(MetricKey.CpuFrameTime, now),
 
-        StatId.GpuTemperature => gpu?.TemperatureC,
-        StatId.GpuCoreClock => gpu?.CoreClockMHz,
-        StatId.GpuMemoryClock => gpu?.MemoryClockMHz,
-        StatId.GpuVramUsage => gpu?.VramUsedMb,
-        StatId.GpuVramPercent => gpu?.VramUsagePercent,
-        StatId.GpuPower => gpu?.PowerW,
-        StatId.GpuUsage => gpu?.UsagePercent,
-        StatId.GpuRenderCompute => gpu?.RenderComputeUsagePercent,
-        StatId.GpuPowerLimited => gpu?.PowerLimited,
-        StatId.GpuTemperatureLimited => gpu?.TemperatureLimited,
-        StatId.GpuCurrentLimited => gpu?.CurrentLimited,
-        StatId.GpuVoltageLimited => gpu?.VoltageLimited,
-        StatId.GpuUtilizationLimited => gpu?.UtilizationLimited,
+        StatId.GpuTemperature => gpu?.Get(MetricKey.GpuTemp, now),
+        StatId.GpuCoreClock => gpu?.Get(MetricKey.GpuCoreClock, now),
+        StatId.GpuMemoryClock => gpu?.Get(MetricKey.GpuMemClock, now),
+        StatId.GpuVramUsage => gpu?.Get(MetricKey.GpuVram, now),
+        StatId.GpuVramPercent => gpu?.Get(MetricKey.GpuVramUtil, now),
+        StatId.GpuPower => gpu?.Get(MetricKey.GpuPower, now),
+        StatId.GpuUsage => gpu?.Get(MetricKey.GpuUsage, now),
+        StatId.GpuRenderCompute => gpu?.Get(MetricKey.GpuRenderCompute, now),
+        StatId.GpuPowerLimited => gpu?.Get(MetricKey.GpuPowerLimited, now),
+        StatId.GpuTemperatureLimited => gpu?.Get(MetricKey.GpuTempLimited, now),
+        StatId.GpuCurrentLimited => gpu?.Get(MetricKey.GpuCurrentLimited, now),
+        StatId.GpuVoltageLimited => gpu?.Get(MetricKey.GpuVoltageLimited, now),
+        StatId.GpuUtilizationLimited => gpu?.Get(MetricKey.GpuUtilLimited, now),
         StatId.GpuBusy => GetValue(MetricKey.GpuBusy, now),
         StatId.GpuWait => GetValue(MetricKey.GpuWait, now),
         StatId.GpuTime => GetValue(MetricKey.GpuTime, now),
@@ -864,7 +864,6 @@ public sealed class PresentMonMonitor : IDisposable
         var now = Stopwatch.GetTimestamp();
         lock (_sync)
         {
-            _gpuSamples.Clear();
             _gpuSamplesAt = now;
             _polledMask = 0;
 
@@ -880,20 +879,20 @@ public sealed class PresentMonMonitor : IDisposable
                     switch (binding.Kind)
                     {
                         case BindingKind.ProcessScalar:
-                        {
-                            var index = (int)binding.Key;
-                            var bit = 1UL << index;
-                            var first = (_polledMask & bit) == 0;
-
-                            // With several swap chains the highest FPS wins; other values keep the first.
-                            if (first || (IsFpsKey(binding.Key) && converted > _values[index].Value))
                             {
-                                _values[index] = new TimedValue(converted, now);
-                                _polledMask |= bit;
-                            }
+                                var index = (int)binding.Key;
+                                var bit = 1UL << index;
+                                var first = (_polledMask & bit) == 0;
 
-                            break;
-                        }
+                                // With several swap chains the highest FPS wins; other values keep the first.
+                                if (first || (IsFpsKey(binding.Key) && converted > _values[index].Value))
+                                {
+                                    _values[index] = new TimedValue(converted, now);
+                                    _polledMask |= bit;
+                                }
+
+                                break;
+                            }
                         case BindingKind.GpuScalar:
                             if (!_gpuSamples.TryGetValue(binding.DeviceId, out var sample))
                             {
@@ -901,7 +900,7 @@ public sealed class PresentMonMonitor : IDisposable
                                 _gpuSamples[binding.DeviceId] = sample;
                             }
 
-                            sample.Set(binding.Key, converted);
+                            sample.Set(binding.Key, converted, now);
                             break;
                     }
                 }
@@ -1000,7 +999,7 @@ public sealed class PresentMonMonitor : IDisposable
             PresentMonNative.PM_DATA_TYPE.DOUBLE => BitConverter.Int64BitsToDouble(Marshal.ReadInt64(address)),
             PresentMonNative.PM_DATA_TYPE.INT32 => (double)Marshal.ReadInt32(address),
             PresentMonNative.PM_DATA_TYPE.UINT32 => (double)unchecked((uint)Marshal.ReadInt32(address)),
-            PresentMonNative.PM_DATA_TYPE.UINT64 => unchecked((double)Marshal.ReadInt64(address)),
+            PresentMonNative.PM_DATA_TYPE.UINT64 => (double)unchecked((ulong)Marshal.ReadInt64(address)),
             PresentMonNative.PM_DATA_TYPE.BOOL => Marshal.ReadByte(address) != 0 ? 1.0 : 0.0,
             PresentMonNative.PM_DATA_TYPE.ENUM => (double)Marshal.ReadInt32(address),
             _ => null,
@@ -1050,7 +1049,7 @@ public sealed class PresentMonMonitor : IDisposable
         var anyGraphics = false;
         foreach (var sample in _gpuSamples.Values)
         {
-            if (IsGraphicsDevice(sample))
+            if (IsGraphicsDevice(sample) && sample.HasUsefulData(now))
             {
                 anyGraphics = true;
                 break;
@@ -1060,6 +1059,9 @@ public sealed class PresentMonMonitor : IDisposable
         GpuSample? best = null;
         foreach (var sample in _gpuSamples.Values)
         {
+            if (!sample.HasUsefulData(now))
+                continue;
+
             if (anyGraphics && !IsGraphicsDevice(sample))
                 continue;
 
@@ -1069,9 +1071,9 @@ public sealed class PresentMonMonitor : IDisposable
                 continue;
             }
 
-            var usage = sample.UsagePercent ?? -1;
-            var bestUsage = best.UsagePercent ?? -1;
-            if (usage > bestUsage || (usage == bestUsage && sample.HasUsefulData && !best.HasUsefulData))
+            var usage = sample.Get(MetricKey.GpuUsage, now) ?? -1;
+            var bestUsage = best.Get(MetricKey.GpuUsage, now) ?? -1;
+            if (usage > bestUsage)
                 best = sample;
         }
 
@@ -1303,7 +1305,7 @@ public sealed class PresentMonMonitor : IDisposable
         PresentMonNative.PM_UNIT.MILLIWATTS => value / 1000.0,
         PresentMonNative.PM_UNIT.KILOWATTS => value * 1000.0,
         PresentMonNative.PM_UNIT.MILLIVOLTS => value / 1000.0,
-        PresentMonNative.PM_UNIT.KILOHERTZ => value * 1000.0,
+        PresentMonNative.PM_UNIT.KILOHERTZ => value / 1000.0,
         PresentMonNative.PM_UNIT.HERTZ => value / 1_000_000.0,
         PresentMonNative.PM_UNIT.GIGAHERTZ => value * 1000.0,
         PresentMonNative.PM_UNIT.BYTES => value / 1048576.0,
@@ -1412,46 +1414,33 @@ public sealed class PresentMonMonitor : IDisposable
     private sealed class GpuSample
     {
         internal uint DeviceId { get; }
-        internal double? TemperatureC { get; private set; }
-        internal double? CoreClockMHz { get; private set; }
-        internal double? MemoryClockMHz { get; private set; }
-        internal double? VramUsedMb { get; private set; }
-        internal double? VramUsagePercent { get; private set; }
-        internal double? PowerW { get; private set; }
-        internal double? UsagePercent { get; private set; }
-        internal double? RenderComputeUsagePercent { get; private set; }
-        internal double? PowerLimited { get; private set; }
-        internal double? TemperatureLimited { get; private set; }
-        internal double? CurrentLimited { get; private set; }
-        internal double? VoltageLimited { get; private set; }
-        internal double? UtilizationLimited { get; private set; }
-
-        internal bool HasUsefulData =>
-            TemperatureC.HasValue || CoreClockMHz.HasValue || PowerW.HasValue ||
-            UsagePercent.HasValue || VramUsedMb.HasValue || RenderComputeUsagePercent.HasValue;
+        private readonly TimedValue[] _metrics = new TimedValue[(int)MetricKey.Count];
 
         internal GpuSample(uint deviceId) => DeviceId = deviceId;
 
-        internal void Set(MetricKey key, double value)
+        internal void Set(MetricKey key, double value, long now)
         {
-            switch (key)
-            {
-                case MetricKey.GpuTemp: TemperatureC = value; break;
-                case MetricKey.GpuCoreClock: CoreClockMHz = value; break;
-                case MetricKey.GpuMemClock: MemoryClockMHz = value; break;
-                case MetricKey.GpuVram: VramUsedMb = value; break;
-                case MetricKey.GpuVramUtil:
-                    VramUsagePercent = double.IsFinite(value) ? Math.Clamp(value, 0.0, 100.0) : null;
-                    break;
-                case MetricKey.GpuPower: PowerW = value; break;
-                case MetricKey.GpuUsage: UsagePercent = value; break;
-                case MetricKey.GpuRenderCompute: RenderComputeUsagePercent = value; break;
-                case MetricKey.GpuPowerLimited: PowerLimited = value; break;
-                case MetricKey.GpuTempLimited: TemperatureLimited = value; break;
-                case MetricKey.GpuCurrentLimited: CurrentLimited = value; break;
-                case MetricKey.GpuVoltageLimited: VoltageLimited = value; break;
-                case MetricKey.GpuUtilLimited: UtilizationLimited = value; break;
-            }
+            if (key == MetricKey.GpuVramUtil && double.IsFinite(value))
+                value = Math.Clamp(value, 0.0, 100.0);
+
+            _metrics[(int)key] = new TimedValue(value, now);
         }
+
+        internal double? Get(MetricKey key, long now)
+        {
+            var entry = _metrics[(int)key];
+            if (entry.Timestamp == 0 || now - entry.Timestamp > ValueExpiryTicks || !double.IsFinite(entry.Value))
+                return null;
+
+            return entry.Value;
+        }
+
+        internal bool HasUsefulData(long now) =>
+            Get(MetricKey.GpuTemp, now).HasValue ||
+            Get(MetricKey.GpuCoreClock, now).HasValue ||
+            Get(MetricKey.GpuPower, now).HasValue ||
+            Get(MetricKey.GpuUsage, now).HasValue ||
+            Get(MetricKey.GpuVram, now).HasValue ||
+            Get(MetricKey.GpuRenderCompute, now).HasValue;
     }
 }
