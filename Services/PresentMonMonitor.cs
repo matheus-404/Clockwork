@@ -385,8 +385,7 @@ public sealed class PresentMonMonitor : IDisposable
         StatId.UntilDisplayed => GetValue(MetricKey.UntilDisplayed, now),
         StatId.BetweenPresents => GetValue(MetricKey.BetweenPresents, now),
         StatId.BetweenDisplayChanges => GetValue(MetricKey.BetweenDisplayChange, now),
-        StatId.ClickToPhotonLatency => GetValue(MetricKey.ClickToPhotonLatency, now),
-        StatId.AllInputToPhotonLatency => GetValue(MetricKey.AllInputToPhotonLatency, now),
+        StatId.InputToPhotonLatency => GetValue(MetricKey.InputToPhotonLatency, now),
         _ => null,
     };
 
@@ -791,8 +790,7 @@ public sealed class PresentMonMonitor : IDisposable
         if (stats.Contains(StatId.RenderPresentLatency)) AddFrameMetric(specs, PresentMonNative.PM_METRIC.RENDER_PRESENT_LATENCY, MetricKey.RenderPresentLatency);
         if (stats.Contains(StatId.UntilDisplayed)) AddFrameMetric(specs, PresentMonNative.PM_METRIC.UNTIL_DISPLAYED, MetricKey.UntilDisplayed);
         if (stats.Contains(StatId.BetweenDisplayChanges)) AddFrameMetric(specs, PresentMonNative.PM_METRIC.BETWEEN_DISPLAY_CHANGE, MetricKey.BetweenDisplayChange);
-        if (stats.Contains(StatId.ClickToPhotonLatency)) AddFrameMetric(specs, PresentMonNative.PM_METRIC.CLICK_TO_PHOTON_LATENCY, MetricKey.ClickToPhotonLatency);
-        if (stats.Contains(StatId.AllInputToPhotonLatency)) AddFrameMetric(specs, PresentMonNative.PM_METRIC.ALL_INPUT_TO_PHOTON_LATENCY, MetricKey.AllInputToPhotonLatency);
+        if (stats.Contains(StatId.InputToPhotonLatency)) AddFrameMetric(specs, PresentMonNative.PM_METRIC.ALL_INPUT_TO_PHOTON_LATENCY, MetricKey.InputToPhotonLatency);
 
         // The between-presents metric feeds the frame history, so it is registered whenever either
         // the statistic itself or anything computed from the history is on (once, never twice).
@@ -987,7 +985,7 @@ public sealed class PresentMonMonitor : IDisposable
     }
 
     private static bool IsInputLatencyKey(MetricKey key) =>
-        key is MetricKey.ClickToPhotonLatency or MetricKey.AllInputToPhotonLatency;
+        key is MetricKey.InputToPhotonLatency;
 
     private double? TryReadValue(Binding binding, int swapChainIndex)
     {
@@ -1373,7 +1371,7 @@ public sealed class PresentMonMonitor : IDisposable
         // Per-frame values
         CpuFrameTime, CpuBusy, CpuWait, GpuTime, GpuBusy, GpuWait, DroppedFrames, GpuLatency,
         DisplayLatency, RenderPresentLatency, UntilDisplayed, BetweenPresents, BetweenDisplayChange,
-        ClickToPhotonLatency, AllInputToPhotonLatency,
+        InputToPhotonLatency,
 
         Count,
     }

@@ -25,7 +25,7 @@ public enum StatId
 
     // Latency
     GpuLatency, DisplayLatency, RenderPresentLatency, UntilDisplayed, BetweenPresents,
-    BetweenDisplayChanges, ClickToPhotonLatency, AllInputToPhotonLatency,
+    BetweenDisplayChanges, InputToPhotonLatency,
 
     // More
     SystemTime, SessionPlaytime,
@@ -154,14 +154,13 @@ public static class StatGroups
         StatId.GpuPowerLimited, StatId.GpuTemperatureLimited, StatId.GpuCurrentLimited,
         StatId.GpuVoltageLimited, StatId.GpuUtilizationLimited, StatId.GpuBusy, StatId.GpuWait, StatId.GpuTime,
         StatId.GpuLatency, StatId.DisplayLatency, StatId.RenderPresentLatency, StatId.UntilDisplayed,
-        StatId.BetweenPresents, StatId.BetweenDisplayChanges, StatId.ClickToPhotonLatency,
-        StatId.AllInputToPhotonLatency);
+        StatId.BetweenPresents, StatId.BetweenDisplayChanges, StatId.InputToPhotonLatency);
 
     /// <summary>Statistics refreshed by the fast loop (FPS and per-frame latency values).</summary>
     public static readonly StatSet FastOwned = StatSet.Of(
         StatId.Fps, StatId.GpuLatency, StatId.DisplayLatency, StatId.RenderPresentLatency,
         StatId.UntilDisplayed, StatId.BetweenPresents, StatId.BetweenDisplayChanges,
-        StatId.ClickToPhotonLatency, StatId.AllInputToPhotonLatency);
+        StatId.InputToPhotonLatency);
 
     /// <summary>Statistics read from the polled GPU telemetry.</summary>
     public static readonly StatSet Gpu = StatSet.Of(
@@ -257,8 +256,7 @@ public static class StatRegistry
             new(StatId.UntilDisplayed, "until-displayed", latency, "Time Until Displayed", "Clock.svg", StatKind.Number, 1, " ms"),
             new(StatId.BetweenPresents, "between-presents", latency, "Between Presents", "Clock.svg", StatKind.Number, 1, " ms"),
             new(StatId.BetweenDisplayChanges, "between-display-changes", latency, "Between Display Changes", "Clock.svg", StatKind.Number, 1, " ms"),
-            new(StatId.ClickToPhotonLatency, "click-to-photon", latency, "Click-to-Photon Latency", "Clock.svg", StatKind.Number, 1, " ms"),
-            new(StatId.AllInputToPhotonLatency, "all-input-to-photon", latency, "All Input-to-Photon Latency", "Clock.svg", StatKind.Number, 1, " ms"),
+            new(StatId.InputToPhotonLatency, "input-to-photon", latency, "Input-to-Photon Latency", "Clock.svg", StatKind.Number, 1, " ms"),
 
             new(StatId.SystemTime, "system-time", more, "System Time", "Clock.svg", StatKind.SystemTime),
             new(StatId.SessionPlaytime, "session-playtime", more, "Session Playtime", "Timer.svg", StatKind.Playtime),
