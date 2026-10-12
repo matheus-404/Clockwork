@@ -17,8 +17,11 @@ public sealed class OverlayController : IDisposable
     private const int HiddenTelemetryDivisor = DetectionIntervalMs / TelemetryIntervalMs;
     private const int MaxTrackedRefreshMisses = 8;
     private const int MaxRememberedSessions = 16;
+    private const int CandidateDebounceMs = 2000;
 
     private static readonly long DisplayIntervalTicks = Stopwatch.Frequency * DisplayIntervalMs / 1000;
+    private static readonly long CandidateDebounceTicks = Stopwatch.Frequency * CandidateDebounceMs / 1000;
+    private static readonly long TopmostReassertIntervalTicks = Stopwatch.Frequency * 2;
 
     private readonly MainWindowViewModel _settings;
     private readonly OverlayViewModel _vm = new();
@@ -26,9 +29,13 @@ public sealed class OverlayController : IDisposable
     private readonly GameDetector _detector = new();
     private readonly CancellationTokenSource _cts = new();
     private readonly SemaphoreSlim _fastWake = new(0, 1);
+    private readonly SemaphoreSlim _telemetryWake = new(0, 1);
     private readonly object _stateSync = new();
     private readonly object _presentMonSync = new();
+    private readonly object _uiUpdateSync = new();
     private readonly Dictionary<string, OverlayLine> _lineByLabel = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _pendingUiUpdates = new(StatRegistry.Count, StringComparer.Ordinal);
+    private readonly Action _applyPendingUiUpdatesAction;
 
     private readonly Dictionary<(int Pid, long CreateTime), long> _sessionStarts = new();
 
@@ -48,22 +55,31 @@ public sealed class OverlayController : IDisposable
     private int _trackedRefreshMisses;
     private bool _overlayWanted;
     private int _hiddenTelemetryTicks;
+    private bool _hasReceivedTelemetry;
+    private bool _overlayVisibleByHotkey = true;
+
+    private int _candidatePid;
+    private long _candidateFirstSeenTicks;
+    private long _lastTopmostReassertTicks;
 
     private OverlayWindow? _window;
     private GameInfo _lastUiGame;
     private bool _hasLastUiGame;
     private int _uiGamePid;
     private bool _uiWasShowing;
+    private int _uiPostPending;
     private int _lastAppliedPositionX = int.MinValue;
     private int _lastAppliedPositionY = int.MinValue;
 
     private volatile bool _disposed;
     private bool _fastLoopActive;
+    private bool _telemetryLoopActive;
 
     public OverlayController(MainWindowViewModel settings)
     {
         _settings = settings;
         _enabled = BuildEnabledSnapshot();
+        _applyPendingUiUpdatesAction = ApplyPendingUiUpdates;
         _settings.PropertyChanged += OnSettingsPropertyChanged;
 
         foreach (var section in _settings.Sections)
@@ -78,7 +94,21 @@ public sealed class OverlayController : IDisposable
         _fastTask = Task.Run(FastTelemetryLoopAsync);
     }
 
+    public bool IsOverlayVisibleByHotkey => _overlayVisibleByHotkey;
+
     public void NotifyPresentMonChanged() => _presentMon.RequestImmediateRetry();
+
+    public void ToggleVisibility()
+    {
+        _overlayVisibleByHotkey = !_overlayVisibleByHotkey;
+        PostUi(() =>
+        {
+            if (!_overlayVisibleByHotkey)
+                HideOverlayOnly();
+            else
+                UpdateDetection();
+        });
+    }
 
     private void OnOptionPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
@@ -134,20 +164,29 @@ public sealed class OverlayController : IDisposable
 
     private Task DetectionLoopAsync() => RunPeriodicAsync("Detection", DetectionIntervalMs, UpdateDetection);
 
-    private Task TelemetryLoopAsync() => RunPeriodicAsync("Telemetry", TelemetryIntervalMs, UpdateTelemetry);
-
-    private async Task RunPeriodicAsync(string name, int intervalMs, Action tick)
+    private async Task TelemetryLoopAsync()
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(intervalMs));
+        var token = _cts.Token;
 
         try
         {
-            while (await timer.WaitForNextTickAsync(_cts.Token).ConfigureAwait(false))
+            while (!token.IsCancellationRequested)
             {
-                try { tick(); }
-                catch (Exception ex) when (ex is not OperationCanceledException)
+                if (!Volatile.Read(ref _telemetryLoopActive))
                 {
-                    Debug.WriteLine($"[Clockwork] {name} tick failed: {ex}");
+                    await _telemetryWake.WaitAsync(token).ConfigureAwait(false);
+                    continue;
+                }
+
+                using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(TelemetryIntervalMs));
+                while (Volatile.Read(ref _telemetryLoopActive) &&
+                       await timer.WaitForNextTickAsync(token).ConfigureAwait(false))
+                {
+                    try { UpdateTelemetry(); }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        Debug.WriteLine($"[Clockwork] Telemetry tick failed: {ex}");
+                    }
                 }
             }
         }
@@ -156,7 +195,7 @@ public sealed class OverlayController : IDisposable
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[Clockwork] {name} loop stopped: {ex}");
+            Debug.WriteLine($"[Clockwork] Telemetry loop stopped: {ex}");
         }
     }
 
@@ -197,9 +236,40 @@ public sealed class OverlayController : IDisposable
         }
     }
 
+    private async Task RunPeriodicAsync(string name, int intervalMs, Action tick)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(intervalMs));
+
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_cts.Token).ConfigureAwait(false))
+            {
+                try { tick(); }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    Debug.WriteLine($"[Clockwork] {name} tick failed: {ex}");
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[Clockwork] {name} loop stopped: {ex}");
+        }
+    }
+
     private void SignalFastLoop()
     {
         try { _fastWake.Release(); }
+        catch (SemaphoreFullException) { }
+        catch (ObjectDisposedException) { }
+    }
+
+    private void SignalTelemetryLoop()
+    {
+        try { _telemetryWake.Release(); }
         catch (SemaphoreFullException) { }
         catch (ObjectDisposedException) { }
     }
@@ -212,11 +282,14 @@ public sealed class OverlayController : IDisposable
         {
             EndSession();
             Volatile.Write(ref _overlayWanted, false);
-            PostUi(() =>
+            if (_uiWasShowing || _window is { IsVisible: true })
             {
-                HideOverlayOnly();
-                UpdateFastLoopState();
-            });
+                PostUi(() =>
+                {
+                    HideOverlayOnly();
+                    UpdateFastLoopState();
+                });
+            }
             return;
         }
 
@@ -227,12 +300,21 @@ public sealed class OverlayController : IDisposable
                 Volatile.Write(ref _gamePid, game.Pid);
                 _trackedRefreshMisses = 0;
                 _sessionStartTimestamp = GetOrCreateSessionStart(game);
+                Volatile.Write(ref _hasReceivedTelemetry, false);
             }
 
             _trackedGame = game;
         }
 
-        var showOverlay = game.IsForeground && game.IsWindowVisible && !game.IsMinimized;
+        UpdateTelemetryLoopState();
+
+        var telemetryReady = enabled.PresentMonAll.IsEmpty || Volatile.Read(ref _hasReceivedTelemetry);
+        var showOverlay = game.IsForeground &&
+                          game.IsWindowVisible &&
+                          !game.IsMinimized &&
+                          telemetryReady &&
+                          Volatile.Read(ref _overlayVisibleByHotkey);
+
         Volatile.Write(ref _overlayWanted, showOverlay);
         PostUi(() => ApplyDetectionUpdate(enabled, game, showOverlay));
     }
@@ -240,35 +322,78 @@ public sealed class OverlayController : IDisposable
     private bool TryGetTrackedGame(EnabledSnapshot enabled, out GameInfo game)
     {
         var needFreshMemory = enabled.NeedsProcessRam;
+        var now = Stopwatch.GetTimestamp();
+
+        GameInfo currentTracked;
+        bool hasTracked;
+        lock (_stateSync)
+        {
+            hasTracked = _trackedGame.HasValue;
+            currentTracked = _trackedGame ?? default;
+        }
 
         if (_detector.TryGet(_settings.IncludeWindowedGames, needFreshMemory, out var foregroundGame))
         {
-            lock (_stateSync)
-                _trackedRefreshMisses = 0;
-
-            game = foregroundGame;
-            return true;
-        }
-
-        GameInfo tracked;
-        lock (_stateSync)
-        {
-            if (_trackedGame is not { } current)
+            if (hasTracked && foregroundGame.Pid == currentTracked.Pid)
             {
-                game = default;
-                return false;
+                _candidatePid = 0;
+                _candidateFirstSeenTicks = 0;
+                lock (_stateSync)
+                    _trackedRefreshMisses = 0;
+
+                game = foregroundGame;
+                return true;
             }
 
-            tracked = current;
+            if (_candidatePid != foregroundGame.Pid)
+            {
+                _candidatePid = foregroundGame.Pid;
+                _candidateFirstSeenTicks = now;
+            }
+
+            var candidateDuration = now - _candidateFirstSeenTicks;
+            if (!hasTracked || candidateDuration >= CandidateDebounceTicks)
+            {
+                _candidatePid = 0;
+                _candidateFirstSeenTicks = 0;
+                lock (_stateSync)
+                    _trackedRefreshMisses = 0;
+
+                game = foregroundGame;
+                return true;
+            }
+
+            if (hasTracked && !GameDetector.IsExecutableBlacklisted(currentTracked.Name))
+            {
+                if (_detector.TryRefreshTracked(currentTracked, needFreshMemory, out var backgroundRefreshed))
+                {
+                    lock (_stateSync)
+                        _trackedRefreshMisses = 0;
+
+                    game = backgroundRefreshed with { IsForeground = false };
+                    return true;
+                }
+            }
+        }
+        else
+        {
+            _candidatePid = 0;
+            _candidateFirstSeenTicks = 0;
         }
 
-        if (GameDetector.IsExecutableBlacklisted(tracked.Name))
+        if (!hasTracked)
         {
             game = default;
             return false;
         }
 
-        if (_detector.TryRefreshTracked(tracked, needFreshMemory, out var refreshed))
+        if (GameDetector.IsExecutableBlacklisted(currentTracked.Name))
+        {
+            game = default;
+            return false;
+        }
+
+        if (_detector.TryRefreshTracked(currentTracked, needFreshMemory, out var refreshed))
         {
             lock (_stateSync)
                 _trackedRefreshMisses = 0;
@@ -287,9 +412,9 @@ public sealed class OverlayController : IDisposable
             return false;
         }
 
-        if (!GameDetector.TryRefreshTrackedWindowOnly(tracked, out var windowRefreshed))
+        if (!GameDetector.TryRefreshTrackedWindowOnly(currentTracked, out var windowRefreshed))
         {
-            windowRefreshed = tracked with
+            windowRefreshed = currentTracked with
             {
                 IsForeground = false,
                 IsWindowVisible = false,
@@ -343,7 +468,10 @@ public sealed class OverlayController : IDisposable
             _trackedGame = null;
             _trackedRefreshMisses = 0;
             _sessionStartTimestamp = 0;
+            Volatile.Write(ref _hasReceivedTelemetry, false);
         }
+
+        UpdateTelemetryLoopState();
 
         lock (_presentMonSync)
         {
@@ -405,7 +533,19 @@ public sealed class OverlayController : IDisposable
             return;
 
         if (!enabled.PresentMonNormal.IsEmpty)
+        {
             _presentMon.FillSnapshot(enabled.PresentMonNormal, _values);
+
+            for (var i = 0; i < enabled.NormalSlots.Length; i++)
+            {
+                var id = enabled.NormalSlots[i].Definition.Id;
+                if (_values[(int)id] is { } v && double.IsFinite(v))
+                {
+                    Volatile.Write(ref _hasReceivedTelemetry, true);
+                    break;
+                }
+            }
+        }
 
         var ram = enabled.NeedsRam ? Win32.GetRamUsage() : null;
         var now = DateTime.Now;
@@ -421,8 +561,16 @@ public sealed class OverlayController : IDisposable
         if (_normalUpdates.Count == 0)
             return;
 
-        var batch = _normalUpdates.ToArray();
-        PostUiBackground(() => ApplyLineValues(enabled, batch));
+        lock (_uiUpdateSync)
+        {
+            for (var i = 0; i < _normalUpdates.Count; i++)
+            {
+                var item = _normalUpdates[i];
+                _pendingUiUpdates[item.Label] = item.Value;
+            }
+        }
+
+        ScheduleUiUpdates();
     }
 
     private bool TryUpdateNormalSlot(
@@ -502,6 +650,16 @@ public sealed class OverlayController : IDisposable
         lastPublish = now;
         _presentMon.FillSnapshot(enabled.PresentMonFast, _fastValues);
 
+        for (var i = 0; i < enabled.FastSlots.Length; i++)
+        {
+            var id = enabled.FastSlots[i].Definition.Id;
+            if (_fastValues[(int)id] is { } v && double.IsFinite(v))
+            {
+                Volatile.Write(ref _hasReceivedTelemetry, true);
+                break;
+            }
+        }
+
         _fastUpdates.Clear();
         foreach (var slot in enabled.FastSlots)
         {
@@ -512,8 +670,16 @@ public sealed class OverlayController : IDisposable
         if (_fastUpdates.Count == 0)
             return;
 
-        var batch = _fastUpdates.ToArray();
-        PostUiBackground(() => ApplyLineValues(enabled, batch));
+        lock (_uiUpdateSync)
+        {
+            for (var i = 0; i < _fastUpdates.Count; i++)
+            {
+                var item = _fastUpdates[i];
+                _pendingUiUpdates[item.Label] = item.Value;
+            }
+        }
+
+        ScheduleUiUpdates();
     }
 
     private EnabledSnapshot BuildEnabledSnapshot()
@@ -539,12 +705,35 @@ public sealed class OverlayController : IDisposable
         Dispatcher.UIThread.Post(action);
     }
 
-    private void PostUiBackground(Action action)
+    private void ScheduleUiUpdates()
     {
         if (_disposed)
             return;
 
-        Dispatcher.UIThread.Post(action, DispatcherPriority.Background);
+        if (Interlocked.CompareExchange(ref _uiPostPending, 1, 0) == 0)
+        {
+            Dispatcher.UIThread.Post(_applyPendingUiUpdatesAction, DispatcherPriority.Background);
+        }
+    }
+
+    private void ApplyPendingUiUpdates()
+    {
+        Interlocked.Exchange(ref _uiPostPending, 0);
+        if (_disposed)
+            return;
+
+        var enabled = Volatile.Read(ref _enabled);
+        SyncLines(enabled.Labels);
+
+        lock (_uiUpdateSync)
+        {
+            foreach (var pair in _pendingUiUpdates)
+            {
+                if (_lineByLabel.TryGetValue(pair.Key, out var line) && line.Value != pair.Value)
+                    line.Value = pair.Value;
+            }
+            _pendingUiUpdates.Clear();
+        }
     }
 
     private void ApplyDetectionUpdate(EnabledSnapshot enabled, GameInfo game, bool showOverlay)
@@ -577,8 +766,12 @@ public sealed class OverlayController : IDisposable
 
             ApplyOverlayPlacement(game);
 
-            if (justShown || !_uiWasShowing)
+            var nowTicks = Stopwatch.GetTimestamp();
+            if (justShown || !_uiWasShowing || nowTicks - _lastTopmostReassertTicks >= TopmostReassertIntervalTicks)
+            {
                 _window.EnsureTopmost();
+                _lastTopmostReassertTicks = nowTicks;
+            }
 
             _uiWasShowing = true;
         }
@@ -598,20 +791,6 @@ public sealed class OverlayController : IDisposable
         _lastAppliedPositionX = int.MinValue;
         _lastAppliedPositionY = int.MinValue;
         ApplyOverlayPlacement(_lastUiGame);
-    }
-
-    private void ApplyLineValues(EnabledSnapshot enabled, LineValueUpdate[] updates)
-    {
-        if (_disposed || !ReferenceEquals(enabled, Volatile.Read(ref _enabled)))
-            return;
-
-        SyncLines(enabled.Labels);
-
-        foreach (var item in updates)
-        {
-            if (_lineByLabel.TryGetValue(item.Label, out var line) && line.Value != item.Value)
-                line.Value = item.Value;
-        }
     }
 
     private void SyncLines(IReadOnlyList<string> names)
@@ -723,6 +902,14 @@ public sealed class OverlayController : IDisposable
             SignalFastLoop();
     }
 
+    private void UpdateTelemetryLoopState()
+    {
+        var active = Volatile.Read(ref _gamePid) != 0;
+        Volatile.Write(ref _telemetryLoopActive, active);
+        if (active)
+            SignalTelemetryLoop();
+    }
+
     private void HideOverlayOnly()
     {
         if (_window is { IsVisible: true })
@@ -747,6 +934,7 @@ public sealed class OverlayController : IDisposable
 
         _cts.Cancel();
         SignalFastLoop();
+        SignalTelemetryLoop();
 
         try { Task.WaitAll([_detectionTask, _telemetryTask, _fastTask], TimeSpan.FromMilliseconds(500)); }
         catch { }
@@ -763,6 +951,7 @@ public sealed class OverlayController : IDisposable
             _presentMon.Dispose();
         _detector.Dispose();
         _fastWake.Dispose();
+        _telemetryWake.Dispose();
         _cts.Dispose();
         GC.SuppressFinalize(this);
     }

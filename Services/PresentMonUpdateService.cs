@@ -21,8 +21,7 @@ public sealed class PresentMonUpdateService : IDisposable
 
     private static readonly Version MinimumSupportedVersion = new(2, 3, 1);
     private const int MaxAutoInstallReleaseMajor = 2;
-    private static readonly bool RequireSignedMsi = false;
-    private const string ExpectedSignerName = "Intel";
+    private const bool RequireSignedMsi = true;
 
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan ChecksumTimeout = TimeSpan.FromSeconds(15);
@@ -51,6 +50,12 @@ public sealed class PresentMonUpdateService : IDisposable
         CancellationToken cancellationToken = default)
     {
         var installed = GetInstalledVersion();
+
+        // If PresentMon is already installed and meets or exceeds the minimum supported version,
+        // avoid aggressive GitHub checks, UAC prompts, and layout mismatch risks.
+        if (installed is not null && installed >= MinimumSupportedVersion)
+            return PresentMonStartupResult.Current(installed, installed);
+
         var installedAvailable = installed is not null;
 
         List<PresentMonRelease> releases;
@@ -92,7 +97,7 @@ public sealed class PresentMonUpdateService : IDisposable
         {
             return Fail(
                 installed,
-                $"No PresentMon release (version {MaxAutoInstallReleaseMajor}.x) with an MSI installer was found.");
+                $"No compatible PresentMon release (version >= {MinimumSupportedVersion} and <= {MaxAutoInstallReleaseMajor}.x) with an MSI installer was found.");
         }
 
         var (release, latestVersion) = selected.Value;
@@ -129,11 +134,11 @@ public sealed class PresentMonUpdateService : IDisposable
                 return Fail(installed, failure);
 
             var updated = GetInstalledVersion();
-            if (updated is null || updated < latestVersion)
+            if (updated is null || updated < MinimumSupportedVersion)
             {
                 return Fail(
                     installed,
-                    $"PresentMon installation completed, but Clockwork could not verify version {latestVersion}.");
+                    $"PresentMon installation completed, but Clockwork could not verify version {latestVersion} (minimum required: {MinimumSupportedVersion}).");
             }
 
             return installed is null
@@ -167,17 +172,18 @@ public sealed class PresentMonUpdateService : IDisposable
         string expectedSha256,
         CancellationToken cancellationToken)
     {
-        await using (var stream = new FileStream(
+        // Keep the FileStream open with FileShare.Read across hash verification, Authenticode check,
+        // and msiexec execution to lock against concurrent file-swap / write attempts in %TEMP%.
+        await using var stream = new FileStream(
             msiPath,
             FileMode.Open,
             FileAccess.Read,
             FileShare.Read,
             64 * 1024,
-            FileOptions.Asynchronous | FileOptions.SequentialScan))
-        {
-            if (!await VerifySha256Async(stream, expectedSha256, cancellationToken).ConfigureAwait(false))
-                return "The downloaded PresentMon MSI failed its SHA-256 integrity check.";
-        }
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+        if (!await VerifySha256Async(stream, expectedSha256, cancellationToken).ConfigureAwait(false))
+            return "The downloaded PresentMon MSI failed its SHA-256 integrity check.";
 
         var signature = MsiSignatureVerifier.Check(msiPath);
         var signatureProblem = DescribeSignatureProblem(signature);
@@ -195,17 +201,43 @@ public sealed class PresentMonUpdateService : IDisposable
             case MsiSignatureStatus.Invalid:
                 return "The downloaded PresentMon MSI has an invalid digital signature.";
 
-            case MsiSignatureStatus.Valid
-                when signature.Signer is null ||
-                     !signature.Signer.Contains(ExpectedSignerName, StringComparison.OrdinalIgnoreCase):
-                return $"The downloaded PresentMon MSI is signed by an unexpected publisher ({signature.Signer ?? "unknown"}).";
-
             case MsiSignatureStatus.Unsigned when RequireSignedMsi:
                 return "The downloaded PresentMon MSI is not digitally signed.";
 
-            default:
+            case MsiSignatureStatus.Valid:
+                if (string.IsNullOrWhiteSpace(signature.Signer) || !IsValidSigner(signature.Signer))
+                    return $"The downloaded PresentMon MSI is signed by an unexpected publisher ({signature.Signer ?? "unknown"}).";
                 return null;
+
+            default:
+                return RequireSignedMsi && signature.Status != MsiSignatureStatus.Valid
+                    ? "The downloaded PresentMon MSI signature could not be verified."
+                    : null;
         }
+    }
+
+    private static bool IsValidSigner(string signer)
+    {
+        if (signer.Contains("Intel Corporation", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        foreach (var part in signer.Split(','))
+        {
+            var trimmed = part.Trim();
+            if (trimmed.StartsWith("O=", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.StartsWith("CN=", StringComparison.OrdinalIgnoreCase))
+            {
+                var value = trimmed[3..].Trim('"', ' ');
+                if (string.Equals(value, "Intel", StringComparison.OrdinalIgnoreCase) ||
+                    value.StartsWith("Intel ", StringComparison.OrdinalIgnoreCase) ||
+                    value.StartsWith("Intel(", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static PresentMonStartupResult Fail(Version? installed, string message) =>
@@ -223,7 +255,7 @@ public sealed class PresentMonUpdateService : IDisposable
         if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)
         {
             throw new PresentMonUpdateCheckException(
-                false,
+                true,
                 "GitHub did not allow the update check (the API may be rate-limited).");
         }
 
@@ -261,6 +293,9 @@ public sealed class PresentMonUpdateService : IDisposable
                 continue;
 
             if (version.Major > MaxAutoInstallReleaseMajor)
+                continue;
+
+            if (version < MinimumSupportedVersion)
                 continue;
 
             if (SelectMsi(release) is null)
@@ -586,4 +621,3 @@ public sealed record PresentMonStartupResult(
     public static PresentMonStartupResult MissingFailed(string message) =>
         new(PresentMonStartupStatus.MissingInstallFailed, null, null, message);
 }
-

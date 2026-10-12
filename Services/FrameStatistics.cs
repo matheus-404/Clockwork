@@ -22,9 +22,12 @@ public sealed class FrameStatistics
 
     /// <summary>
     /// Frame times at or above this are treated as idle gaps (loading, pause, alt-tab) and are
-    /// excluded from the running average FPS.
+    /// excluded from both the running average FPS and percentile low calculations.
     /// </summary>
-    public const double AverageGapThresholdMs = 2000.0;
+    public const double GapThresholdMs = 2000.0;
+
+    /// <summary>Backwards-compatible alias for <see cref="GapThresholdMs"/>.</summary>
+    public const double AverageGapThresholdMs = GapThresholdMs;
 
     private static readonly double TicksPerMs = Stopwatch.Frequency / 1000.0;
 
@@ -108,7 +111,7 @@ public sealed class FrameStatistics
         {
             foreach (var frameMs in frameTimesMs)
             {
-                if (frameMs > 0 && frameMs < AverageGapThresholdMs)
+                if (frameMs > 0 && frameMs < GapThresholdMs)
                 {
                     _averageFrames++;
                     _averageTimeMs += frameMs;
@@ -139,8 +142,12 @@ public sealed class FrameStatistics
         var index = NewestIndex;
         for (var i = 0; i < _count && elapsed < FpsWindowMs; i++)
         {
-            elapsed += _frameTimesMs[index];
-            frames++;
+            var frameMs = _frameTimesMs[index];
+            if (frameMs > 0 && frameMs < GapThresholdMs)
+            {
+                elapsed += frameMs;
+                frames++;
+            }
             index = Previous(index);
         }
 
@@ -158,8 +165,12 @@ public sealed class FrameStatistics
         var index = NewestIndex;
         for (var i = 0; i < _count && total < FpsWindowMs; i++)
         {
-            total += _frameTimesMs[index];
-            frames++;
+            var frameMs = _frameTimesMs[index];
+            if (frameMs > 0 && frameMs < GapThresholdMs)
+            {
+                total += frameMs;
+                frames++;
+            }
             index = Previous(index);
         }
 
@@ -172,8 +183,9 @@ public sealed class FrameStatistics
 
     /// <summary>
     /// Copies the frame times that fall inside the last <paramref name="windowSeconds"/> into
-    /// <paramref name="destination"/> (newest first) and returns how many were copied. Returns 0
-    /// when the data is stale.
+    /// <paramref name="destination"/> (newest first) and returns how many were copied. Frame gaps
+    /// equal to or exceeding <see cref="GapThresholdMs"/> are excluded so loading hitches do not skew lows.
+    /// Returns 0 when the data is stale.
     /// </summary>
     public int CopyRecentFrameTimes(long nowTicks, double windowSeconds, double[] destination)
     {
@@ -188,7 +200,12 @@ public sealed class FrameStatistics
             if (_stamps[index] < oldestAllowed)
                 break;
 
-            destination[copied++] = _frameTimesMs[index];
+            var frameTime = _frameTimesMs[index];
+            if (frameTime > 0 && frameTime < GapThresholdMs)
+            {
+                destination[copied++] = frameTime;
+            }
+
             index = Previous(index);
         }
 
@@ -204,14 +221,29 @@ public sealed class FrameStatistics
         if (count <= 0)
             return (null, null);
 
-        Array.Sort(samples, 0, count);
-        return (LowFromSlowest(samples, count, 0.01), LowFromSlowest(samples, count, 0.001));
+        var validCount = 0;
+        for (var i = 0; i < count; i++)
+        {
+            var val = samples[i];
+            if (val > 0 && val < GapThresholdMs && double.IsFinite(val))
+            {
+                samples[validCount++] = val;
+            }
+        }
+
+        if (validCount <= 0)
+            return (null, null);
+
+        Array.Sort(samples, 0, validCount);
+        return (LowFromSlowest(samples, validCount, 0.01), LowFromSlowest(samples, validCount, 0.001));
     }
 
     private static double? LowFromSlowest(double[] sortedAscending, int count, double fraction)
     {
-        var slowCount = (int)Math.Floor(count * fraction);
-        if (slowCount == 0)
+        // Round to nearest integer count so 100-199 samples scale smoothly rather than pinning to 1 frame,
+        // and 0.1% lows begin displaying around 500 samples rather than waiting strictly for 1,000 frames.
+        var slowCount = Math.Min(count, (int)Math.Round(count * fraction, MidpointRounding.AwayFromZero));
+        if (slowCount <= 0)
             return null;
 
         var total = 0.0;

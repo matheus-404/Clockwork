@@ -1,10 +1,13 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
+using Avalonia.Threading;
 
 namespace Clockwork.Overlay;
 
 public partial class OverlayWindow : Window
 {
+    private readonly DispatcherTimer _topmostTimer;
     private double _lastScale = double.NaN;
     private bool _lastBackgroundEnabled;
     private byte _lastBackgroundAlpha;
@@ -13,6 +16,14 @@ public partial class OverlayWindow : Window
     public OverlayWindow()
     {
         InitializeComponent();
+
+        _topmostTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(2),
+        };
+        _topmostTimer.Tick += OnTopmostTimerTick;
+
+        PropertyChanged += OnWindowPropertyChanged;
     }
 
     public void SetScale(double scale)
@@ -59,20 +70,55 @@ public partial class OverlayWindow : Window
     public void EnsureTopmost()
     {
         var hwnd = TryGetPlatformHandle()?.Handle ?? 0;
+        if (hwnd == 0)
+            return;
+
         Win32.BringToTopmost(hwnd);
-        ApplyExtendedStyles();
+        ApplyExtendedStyles(hwnd);
     }
 
     protected override void OnOpened(EventArgs e)
     {
         base.OnOpened(e);
-        ApplyExtendedStyles();
+        EnsureTopmost();
+        if (IsVisible)
+            _topmostTimer.Start();
     }
 
-    private void ApplyExtendedStyles()
+    protected override void OnClosed(EventArgs e)
     {
-        var hwnd = TryGetPlatformHandle()?.Handle ?? 0;
-        if (hwnd == 0) return;
+        _topmostTimer.Stop();
+        base.OnClosed(e);
+    }
+
+    private void OnTopmostTimerTick(object? sender, EventArgs e)
+    {
+        if (IsVisible)
+            EnsureTopmost();
+        else
+            _topmostTimer.Stop();
+    }
+
+    private void OnWindowPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
+    {
+        if (e.Property == IsVisibleProperty)
+        {
+            if (IsVisible)
+            {
+                EnsureTopmost();
+                _topmostTimer.Start();
+            }
+            else
+            {
+                _topmostTimer.Stop();
+            }
+        }
+    }
+
+    private static void ApplyExtendedStyles(nint hwnd)
+    {
+        if (hwnd == 0)
+            return;
 
         var style = Win32.GetWindowLongPtr(hwnd, Win32.GWL_EXSTYLE);
         var targetStyle = style

@@ -35,7 +35,9 @@ public sealed class PresentMonMonitor : IDisposable
     /// <summary>How long the lows window looks back.</summary>
     internal const double LowsWindowSeconds = 60.0;
 
-    private static readonly long ValueExpiryTicks = Stopwatch.Frequency * 2;
+    private static readonly long ValueExpiryTicks = Stopwatch.Frequency * 3;
+    private static readonly long InputLatencyExpiryTicks = Stopwatch.Frequency * 5;
+    private static readonly long DroppedFrameHoldTicks = Stopwatch.Frequency * 2;
     private static readonly long LowsRefreshTicks = Stopwatch.Frequency;
 
     private readonly object _sync = new();
@@ -89,7 +91,7 @@ public sealed class PresentMonMonitor : IDisposable
     private readonly Dictionary<uint, GpuSample> _gpuSamples = new();
     private long _gpuSamplesAt;
     private readonly TimedValue[] _values = new TimedValue[(int)MetricKey.Count];
-    private ulong _polledMask;
+    private long _lastDroppedFrameTs;
 
     public bool IsAvailable => _session != 0 && _api is not null;
 
@@ -170,7 +172,7 @@ public sealed class PresentMonMonitor : IDisposable
         {
             _frames.Reset();
             Array.Clear(_values);
-            _polledMask = 0;
+            _lastDroppedFrameTs = 0;
             _gpuSamples.Clear();
             _gpuSamplesAt = 0;
             _low1 = null;
@@ -263,31 +265,71 @@ public sealed class PresentMonMonitor : IDisposable
     }
 
     /// <summary>
-    /// Explains why a statistic has no value ("Unsupported" or "Unavailable") for the few
-    /// statistics where PresentMon reports that, or null when there is nothing to add.
+    /// Explains why a statistic has no value ("No Service", "Connecting...", "Unsupported", or "Unavailable")
+    /// to avoid silent failures when the service is stopped or a metric is not supported.
     /// </summary>
     internal string? GetStatusText(StatId id)
     {
-        var metric = id switch
-        {
-            StatId.GpuRenderCompute => PresentMonNative.PM_METRIC.GPU_RENDER_COMPUTE_UTILIZATION,
-            StatId.GpuPowerLimited => PresentMonNative.PM_METRIC.GPU_POWER_LIMITED,
-            StatId.GpuTemperatureLimited => PresentMonNative.PM_METRIC.GPU_TEMPERATURE_LIMITED,
-            StatId.GpuCurrentLimited => PresentMonNative.PM_METRIC.GPU_CURRENT_LIMITED,
-            StatId.GpuVoltageLimited => PresentMonNative.PM_METRIC.GPU_VOLTAGE_LIMITED,
-            StatId.GpuUtilizationLimited => PresentMonNative.PM_METRIC.GPU_UTILIZATION_LIMITED,
-            _ => (PresentMonNative.PM_METRIC?)null,
-        };
+        if (!StatGroups.PresentMonBacked.Contains(id))
+            return null;
 
-        return metric is null ? null : GetMetricStatusText(metric.Value);
+        if (!IsAvailable || _session == 0)
+        {
+            if (_lastError is { } err && err.Contains("version", StringComparison.OrdinalIgnoreCase))
+                return "Incompatible";
+
+            return "No Service";
+        }
+
+        if (!_processTracked || TrackedPid == 0)
+            return "Connecting...";
+
+        var metric = MetricForStat(id);
+        return metric.HasValue ? GetMetricStatusText(metric.Value) : null;
     }
+
+    private static PresentMonNative.PM_METRIC? MetricForStat(StatId id) => id switch
+    {
+        StatId.CpuUsage => PresentMonNative.PM_METRIC.CPU_UTILIZATION,
+        StatId.CpuBusy => PresentMonNative.PM_METRIC.CPU_BUSY,
+        StatId.CpuWait => PresentMonNative.PM_METRIC.CPU_WAIT,
+        StatId.CpuFrameTime => PresentMonNative.PM_METRIC.CPU_FRAME_TIME,
+        StatId.PresentedFps => PresentMonNative.PM_METRIC.PRESENTED_FPS,
+        StatId.DisplayedFps => PresentMonNative.PM_METRIC.DISPLAYED_FPS,
+        StatId.ApplicationFps => PresentMonNative.PM_METRIC.APPLICATION_FPS,
+        StatId.DroppedFrames => PresentMonNative.PM_METRIC.DROPPED_FRAMES,
+        StatId.GpuTemperature => PresentMonNative.PM_METRIC.GPU_TEMPERATURE,
+        StatId.GpuCoreClock => PresentMonNative.PM_METRIC.GPU_FREQUENCY,
+        StatId.GpuMemoryClock => PresentMonNative.PM_METRIC.GPU_MEM_FREQUENCY,
+        StatId.GpuVramUsage => PresentMonNative.PM_METRIC.GPU_MEM_USED,
+        StatId.GpuVramPercent => PresentMonNative.PM_METRIC.GPU_MEM_UTILIZATION,
+        StatId.GpuPower => PresentMonNative.PM_METRIC.GPU_POWER,
+        StatId.GpuUsage => PresentMonNative.PM_METRIC.GPU_UTILIZATION,
+        StatId.GpuRenderCompute => PresentMonNative.PM_METRIC.GPU_RENDER_COMPUTE_UTILIZATION,
+        StatId.GpuPowerLimited => PresentMonNative.PM_METRIC.GPU_POWER_LIMITED,
+        StatId.GpuTemperatureLimited => PresentMonNative.PM_METRIC.GPU_TEMPERATURE_LIMITED,
+        StatId.GpuCurrentLimited => PresentMonNative.PM_METRIC.GPU_CURRENT_LIMITED,
+        StatId.GpuVoltageLimited => PresentMonNative.PM_METRIC.GPU_VOLTAGE_LIMITED,
+        StatId.GpuUtilizationLimited => PresentMonNative.PM_METRIC.GPU_UTILIZATION_LIMITED,
+        StatId.GpuBusy => PresentMonNative.PM_METRIC.GPU_BUSY,
+        StatId.GpuWait => PresentMonNative.PM_METRIC.GPU_WAIT,
+        StatId.GpuTime => PresentMonNative.PM_METRIC.GPU_TIME,
+        StatId.GpuLatency => PresentMonNative.PM_METRIC.GPU_LATENCY,
+        StatId.DisplayLatency => PresentMonNative.PM_METRIC.DISPLAY_LATENCY,
+        StatId.RenderPresentLatency => PresentMonNative.PM_METRIC.RENDER_PRESENT_LATENCY,
+        StatId.UntilDisplayed => PresentMonNative.PM_METRIC.UNTIL_DISPLAYED,
+        StatId.BetweenPresents => PresentMonNative.PM_METRIC.BETWEEN_PRESENTS,
+        StatId.BetweenDisplayChanges => PresentMonNative.PM_METRIC.BETWEEN_DISPLAY_CHANGE,
+        StatId.InputToPhotonLatency => PresentMonNative.PM_METRIC.ALL_INPUT_TO_PHOTON_LATENCY,
+        _ => null,
+    };
 
     private string? GetMetricStatusText(PresentMonNative.PM_METRIC metric)
     {
         lock (_sync)
         {
             if (TrackedPid == 0 || !IsAvailable)
-                return null;
+                return "No Service";
 
             if (IsMetricBound(metric))
                 return null;
@@ -352,10 +394,13 @@ public sealed class PresentMonMonitor : IDisposable
         StatId.Low1Fps => low1,
         StatId.Low01Fps => low01,
         StatId.FrameTime => _frames.CalculateFrameTime(now),
-        StatId.DroppedFrames => GetValue(MetricKey.DroppedFrames, now),
+        StatId.DroppedFrames => _frames.IsStale(now)
+            ? null
+            : (now - _lastDroppedFrameTs < DroppedFrameHoldTicks ? 1.0 : 0.0),
         StatId.PresentedFps => GetRateMetric(MetricKey.PresentedFps, now, fallbackFromFrameTimes: true),
         StatId.DisplayedFps => GetRateMetric(MetricKey.DisplayedFps, now, fallbackFromDisplayedTime: true),
-        StatId.ApplicationFps => GetRateMetric(MetricKey.ApplicationFps, now, fallbackFromFrameTimes: true),
+        // Application FPS must never silently fall back to presented FPS when frame generation is active.
+        StatId.ApplicationFps => GetRateMetric(MetricKey.ApplicationFps, now, fallbackFromFrameTimes: false),
 
         StatId.CpuUsage => GetValue(MetricKey.CpuUsage, now),
         StatId.CpuBusy => GetValue(MetricKey.CpuBusy, now),
@@ -466,6 +511,13 @@ public sealed class PresentMonMonitor : IDisposable
         if (!PresentMonNative.Api.TryLoad(out var api, out var loadError) || api is null)
         {
             SetError(loadError ?? "Failed to load PresentMon API.");
+            return false;
+        }
+
+        if (!PresentMonNative.HasExpectedIntrospectionLayout())
+        {
+            SetError("PresentMon ABI layout mismatch: introspection struct sizes do not match expectations.");
+            api.Dispose();
             return false;
         }
 
@@ -618,8 +670,15 @@ public sealed class PresentMonMonitor : IDisposable
 
         try
         {
+            bool ok;
             lock (_sync)
-                ReadIntrospection(rootPtr);
+                ok = ReadIntrospection(rootPtr);
+
+            if (!ok)
+            {
+                SetError("PresentMon introspection validation failed: unexpected data layout or device/metric values.");
+                return false;
+            }
 
             _introspectionValid = true;
             return true;
@@ -869,48 +928,66 @@ public sealed class PresentMonMonitor : IDisposable
         if (swapChains == 0)
             return;
 
+        // When multiple swap chains exist (e.g., Discord/Steam overlays or frame-generation pipelines),
+        // determine the primary game swap chain by selecting the one with the highest active FPS.
+        var primarySwapChain = 0;
+        if (swapChains > 1)
+        {
+            var bestFps = -1.0;
+            for (var s = 0; s < (int)swapChains; s++)
+            {
+                foreach (var binding in _bindings)
+                {
+                    if (binding.Kind == BindingKind.ProcessScalar && IsFpsKey(binding.Key))
+                    {
+                        var val = TryReadValue(binding, s);
+                        if (val.HasValue && double.IsFinite(val.Value) && val.Value > bestFps)
+                        {
+                            bestFps = val.Value;
+                            primarySwapChain = s;
+                        }
+                    }
+                }
+            }
+        }
+
         var now = Stopwatch.GetTimestamp();
         lock (_sync)
         {
             _gpuSamplesAt = now;
-            _polledMask = 0;
 
-            for (var swapChainIndex = 0; swapChainIndex < swapChains; swapChainIndex++)
+            foreach (var binding in _bindings)
             {
-                foreach (var binding in _bindings)
+                switch (binding.Kind)
                 {
-                    var value = TryReadValue(binding, swapChainIndex);
-                    if (!value.HasValue || !double.IsFinite(value.Value))
-                        continue;
-
-                    var converted = ConvertToDisplayUnit(value.Value, binding.Unit);
-                    switch (binding.Kind)
-                    {
-                        case BindingKind.ProcessScalar:
+                    case BindingKind.ProcessScalar:
+                        {
+                            var value = TryReadValue(binding, primarySwapChain);
+                            if (value.HasValue && double.IsFinite(value.Value))
                             {
-                                var index = (int)binding.Key;
-                                var bit = 1UL << index;
-                                var first = (_polledMask & bit) == 0;
+                                var converted = ConvertToDisplayUnit(value.Value, binding.Unit);
+                                _values[(int)binding.Key] = new TimedValue(converted, now);
+                            }
+                            break;
+                        }
 
-                                // With several swap chains the highest FPS wins; other values keep the first.
-                                if (first || (IsFpsKey(binding.Key) && converted > _values[index].Value))
+                    case BindingKind.GpuScalar:
+                        {
+                            // GPU metrics are per-device and don't depend on swap chain; poll device 0 slot once.
+                            var value = TryReadValue(binding, 0);
+                            if (value.HasValue && double.IsFinite(value.Value))
+                            {
+                                var converted = ConvertToDisplayUnit(value.Value, binding.Unit);
+                                if (!_gpuSamples.TryGetValue(binding.DeviceId, out var sample))
                                 {
-                                    _values[index] = new TimedValue(converted, now);
-                                    _polledMask |= bit;
+                                    sample = new GpuSample(binding.DeviceId);
+                                    _gpuSamples[binding.DeviceId] = sample;
                                 }
 
-                                break;
+                                sample.Set(binding.Key, converted, now);
                             }
-                        case BindingKind.GpuScalar:
-                            if (!_gpuSamples.TryGetValue(binding.DeviceId, out var sample))
-                            {
-                                sample = new GpuSample(binding.DeviceId);
-                                _gpuSamples[binding.DeviceId] = sample;
-                            }
-
-                            sample.Set(binding.Key, converted, now);
                             break;
-                    }
+                        }
                 }
             }
         }
@@ -925,6 +1002,10 @@ public sealed class PresentMonMonitor : IDisposable
         var pid = TrackedPid;
         if (api is null || _frameQuery == 0 || _frameBlob == 0 || pid == 0 || _frameBlobSize == 0)
             return;
+
+        // Allocate once on the method frame to satisfy CA2014
+        Span<double> metricSums = stackalloc double[(int)MetricKey.Count];
+        Span<int> metricCounts = stackalloc int[(int)MetricKey.Count];
 
         while (true)
         {
@@ -946,6 +1027,10 @@ public sealed class PresentMonMonitor : IDisposable
                 var stride = (int)_frameBlobSize;
                 var batchCount = 0;
 
+                metricSums.Clear();
+                metricCounts.Clear();
+                var anyDropped = false;
+
                 for (var i = 0; i < requested; i++)
                 {
                     foreach (var binding in _frameBindings)
@@ -956,33 +1041,77 @@ public sealed class PresentMonMonitor : IDisposable
 
                         var converted = ConvertToDisplayUnit(value.Value, binding.Unit);
 
-                        if (IsInputLatencyKey(binding.Key))
+                        if (binding.Key == MetricKey.DroppedFrames)
                         {
-                            // A zero means "no input event for this frame" and must not overwrite a real reading.
-                            if (converted > 0)
-                                _values[(int)binding.Key] = new TimedValue(converted, now);
+                            if (converted != 0)
+                                anyDropped = true;
+                            continue;
+                        }
+
+                        if (IsLatencyKey(binding.Key))
+                        {
+                            // A non-positive latency indicates an unmeasured or inapplicable event for this frame.
+                            if (converted <= 0)
+                                continue;
+                        }
+                        else if (binding.Key == MetricKey.BetweenPresents)
+                        {
+                            if (converted <= 0 || converted >= MaxPlausibleFrameMs)
+                                continue;
+
+                            if (batchCount < _frameScratch.Length)
+                                _frameScratch[batchCount++] = converted;
                         }
                         else
                         {
-                            _values[(int)binding.Key] = new TimedValue(converted, now);
+                            if (converted < 0 || converted >= MaxPlausibleFrameMs)
+                                continue;
                         }
 
-                        if (binding.Key == MetricKey.BetweenPresents &&
-                            converted > 0 && converted < MaxPlausibleFrameMs &&
-                            batchCount < _frameScratch.Length)
-                        {
-                            _frameScratch[batchCount++] = converted;
-                        }
+                        metricSums[(int)binding.Key] += converted;
+                        metricCounts[(int)binding.Key]++;
                     }
                 }
 
-                _frames.AddBatch(_frameScratch.AsSpan(0, batchCount), now);
+                if (anyDropped)
+                    _lastDroppedFrameTs = now;
+
+                // Smooth out frame-event telemetry across the publish window instead of overwriting with the single last sample.
+                const double alpha = 0.25;
+                for (var k = 0; k < (int)MetricKey.Count; k++)
+                {
+                    if (metricCounts[k] == 0)
+                        continue;
+
+                    var batchAvg = metricSums[k] / metricCounts[k];
+                    var existing = _values[k];
+                    if (existing.Timestamp == 0 || now - existing.Timestamp > ValueExpiryTicks)
+                    {
+                        _values[k] = new TimedValue(batchAvg, now);
+                    }
+                    else
+                    {
+                        var smoothed = (existing.Value * (1.0 - alpha)) + (batchAvg * alpha);
+                        _values[k] = new TimedValue(smoothed, now);
+                    }
+                }
+
+                if (batchCount > 0)
+                    _frames.AddBatch(_frameScratch.AsSpan(0, batchCount), now);
             }
 
             if (requested < FrameBufferCapacity)
                 break;
         }
     }
+
+    private static bool IsLatencyKey(MetricKey key) =>
+        key is MetricKey.GpuLatency
+            or MetricKey.DisplayLatency
+            or MetricKey.RenderPresentLatency
+            or MetricKey.UntilDisplayed
+            or MetricKey.BetweenDisplayChange
+            or MetricKey.InputToPhotonLatency;
 
     private static bool IsInputLatencyKey(MetricKey key) =>
         key is MetricKey.InputToPhotonLatency;
@@ -1022,7 +1151,11 @@ public sealed class PresentMonMonitor : IDisposable
     private double? GetValue(MetricKey key, long now)
     {
         var entry = _values[(int)key];
-        if (entry.Timestamp == 0 || now - entry.Timestamp > ValueExpiryTicks || !double.IsFinite(entry.Value))
+        if (entry.Timestamp == 0 || !double.IsFinite(entry.Value))
+            return null;
+
+        var expiry = IsInputLatencyKey(key) ? InputLatencyExpiryTicks : ValueExpiryTicks;
+        if (now - entry.Timestamp > expiry)
             return null;
 
         return entry.Value;
@@ -1094,9 +1227,35 @@ public sealed class PresentMonMonitor : IDisposable
     // ---- introspection -----------------------------------------------------------------------
 
     // Callers hold _sync.
-    private void ReadIntrospection(IntPtr rootPtr)
+    private bool ReadIntrospection(IntPtr rootPtr)
     {
+        if (rootPtr == IntPtr.Zero)
+            return false;
+
         var root = Marshal.PtrToStructure<PresentMonNative.PM_INTROSPECTION_ROOT>(rootPtr);
+        if (root.pDevices == IntPtr.Zero || root.pMetrics == IntPtr.Zero)
+            return false;
+
+        var devices = EnumerateObjects<PresentMonNative.PM_INTROSPECTION_DEVICE>(root.pDevices).ToList();
+        var metrics = EnumerateObjects<PresentMonNative.PM_INTROSPECTION_METRIC>(root.pMetrics).ToList();
+
+        if (devices.Count == 0 || metrics.Count == 0)
+            return false;
+
+        // Sanity check devices and metrics against known enum bounds to prevent memory misreads if struct layouts change.
+        foreach (var device in devices)
+        {
+            if (device.type is < PresentMonNative.PM_DEVICE_TYPE.INDEPENDENT or > PresentMonNative.PM_DEVICE_TYPE.SYSTEM)
+                return false;
+        }
+
+        foreach (var metric in metrics)
+        {
+            if (metric.type is < PresentMonNative.PM_METRIC_TYPE.DYNAMIC or > PresentMonNative.PM_METRIC_TYPE.DYNAMIC_FRAME)
+                return false;
+            if (metric.unit is < PresentMonNative.PM_UNIT.DIMENSIONLESS or > PresentMonNative.PM_UNIT.QPC)
+                return false;
+        }
 
         _metrics = new Dictionary<PresentMonNative.PM_METRIC, MetricInfo>();
         _graphicsDeviceIds.Clear();
@@ -1106,7 +1265,7 @@ public sealed class PresentMonMonitor : IDisposable
         _independentDeviceId = 0;
         _hasIndependentDevice = false;
 
-        foreach (var device in EnumerateObjects<PresentMonNative.PM_INTROSPECTION_DEVICE>(root.pDevices))
+        foreach (var device in devices)
         {
             _deviceTypes[device.id] = device.type;
 
@@ -1124,12 +1283,18 @@ public sealed class PresentMonMonitor : IDisposable
             }
         }
 
-        foreach (var metric in EnumerateObjects<PresentMonNative.PM_INTROSPECTION_METRIC>(root.pMetrics))
+        foreach (var metric in metrics)
         {
             if (metric.pTypeInfo == 0)
                 continue;
 
             var typeInfo = Marshal.PtrToStructure<PresentMonNative.PM_INTROSPECTION_DATA_TYPE_INFO>(metric.pTypeInfo);
+            if (typeInfo.polledType is < PresentMonNative.PM_DATA_TYPE.DOUBLE or > PresentMonNative.PM_DATA_TYPE.VOID ||
+                typeInfo.frameType is < PresentMonNative.PM_DATA_TYPE.DOUBLE or > PresentMonNative.PM_DATA_TYPE.VOID)
+            {
+                return false;
+            }
+
             var stats = new HashSet<PresentMonNative.PM_STAT>();
             foreach (var statInfo in EnumerateObjects<PresentMonNative.PM_INTROSPECTION_STAT_INFO>(metric.pStatInfo))
                 stats.Add(statInfo.stat);
@@ -1153,6 +1318,8 @@ public sealed class PresentMonMonitor : IDisposable
 
             _metrics[metric.id] = info;
         }
+
+        return true;
     }
 
     private static IEnumerable<T> EnumerateObjects<T>(IntPtr arrayPtr) where T : struct
@@ -1452,4 +1619,3 @@ public sealed class PresentMonMonitor : IDisposable
             Get(MetricKey.GpuRenderCompute, now).HasValue;
     }
 }
-

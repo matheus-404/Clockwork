@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -5,12 +7,25 @@ using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.VisualTree;
 using Clockwork.Converters;
+using Clockwork.Overlay;
 using Clockwork.ViewModels;
 
 namespace Clockwork.Views;
 
 public partial class MainWindow : Window
 {
+    private const int OverlayHotkeyId = 9001;
+    private const int GWLP_WNDPROC = -4;
+
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+    private delegate nint WndProcDelegate(nint hWnd, uint msg, nint wParam, nint lParam);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
+    private static extern nint SetWindowLongPtr(nint hWnd, int nIndex, nint dwNewLong);
+
+    [DllImport("user32.dll", EntryPoint = "CallWindowProcW")]
+    private static extern nint CallWindowProc(nint lpPrevWndFunc, nint hWnd, uint msg, nint wParam, nint lParam);
+
     private readonly DropShadowEffect _previewShadow = new()
     {
         Color = Colors.Black,
@@ -33,6 +48,11 @@ public partial class MainWindow : Window
     private bool _draggingOverlay;
     private Point _dragOffset;
     private MainWindowViewModel? ViewModel => DataContext as MainWindowViewModel;
+
+    private nint _hwnd;
+    private nint _oldWndProc;
+    private WndProcDelegate? _wndProcDelegate;
+    private bool _isHotkeyRegistered;
 
     public MainWindow()
     {
@@ -76,14 +96,13 @@ public partial class MainWindow : Window
 
     private void OnLoaded(object? sender, RoutedEventArgs e)
     {
-        // Unsubscribe first so a second Loaded (for example after a restore from the tray) can
-        // never leave the handler subscribed twice.
         if (ViewModel is { } vm)
         {
             vm.PropertyChanged -= OnViewModelPropertyChanged;
             vm.PropertyChanged += OnViewModelPropertyChanged;
         }
 
+        SetupHotkeyHook();
         UpdateMaximizeIcon();
         UpdateOverlayPreviewAppearance();
         UpdateOverlayPreviewPosition();
@@ -91,6 +110,8 @@ public partial class MainWindow : Window
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        TeardownHotkeyHook();
+
         if (ViewModel is { } vm)
             vm.PropertyChanged -= OnViewModelPropertyChanged;
     }
@@ -109,6 +130,163 @@ public partial class MainWindow : Window
         {
             UpdateOverlayPreviewAppearance();
         }
+
+        if (e.PropertyName is nameof(MainWindowViewModel.ToggleHotkey))
+        {
+            UpdateHotkeyRegistration();
+        }
+    }
+
+    private void SetupHotkeyHook()
+    {
+        _hwnd = TryGetPlatformHandle()?.Handle ?? 0;
+        if (_hwnd == 0)
+            return;
+
+        if (_oldWndProc == 0)
+        {
+            _wndProcDelegate = HookWndProc;
+            _oldWndProc = SetWindowLongPtr(_hwnd, GWLP_WNDPROC, Marshal.GetFunctionPointerForDelegate(_wndProcDelegate));
+        }
+
+        UpdateHotkeyRegistration();
+    }
+
+    private void TeardownHotkeyHook()
+    {
+        if (_hwnd != 0 && _isHotkeyRegistered)
+        {
+            Win32.UnregisterHotKey(_hwnd, OverlayHotkeyId);
+            _isHotkeyRegistered = false;
+        }
+
+        if (_hwnd != 0 && _oldWndProc != 0)
+        {
+            SetWindowLongPtr(_hwnd, GWLP_WNDPROC, _oldWndProc);
+            _oldWndProc = 0;
+            _wndProcDelegate = null;
+        }
+
+        _hwnd = 0;
+    }
+
+    private void UpdateHotkeyRegistration()
+    {
+        if (_hwnd == 0)
+            return;
+
+        if (_isHotkeyRegistered)
+        {
+            Win32.UnregisterHotKey(_hwnd, OverlayHotkeyId);
+            _isHotkeyRegistered = false;
+        }
+
+        var hotkeyStr = ViewModel?.ToggleHotkey ?? "F11";
+        if (TryParseHotkey(hotkeyStr, out var modifiers, out var vk))
+        {
+            _isHotkeyRegistered = Win32.RegisterHotKey(_hwnd, OverlayHotkeyId, modifiers, vk);
+        }
+    }
+
+    private nint HookWndProc(nint hWnd, uint msg, nint wParam, nint lParam)
+    {
+        if (msg == Win32.WM_HOTKEY && (int)wParam == OverlayHotkeyId)
+        {
+            TriggerOverlayToggle();
+            return 0;
+        }
+
+        return CallWindowProc(_oldWndProc, hWnd, msg, wParam, lParam);
+    }
+
+    private static void TriggerOverlayToggle()
+    {
+        if (Application.Current is App app)
+        {
+            var field = typeof(App).GetField("_overlay", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (field?.GetValue(app) is OverlayController overlay)
+            {
+                overlay.ToggleVisibility();
+            }
+        }
+    }
+
+    private static bool TryParseHotkey(string? text, out uint modifiers, out uint vk)
+    {
+        modifiers = Win32.MOD_NOREPEAT;
+        vk = 0;
+
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        var parts = text.Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        string? keyPart = null;
+
+        foreach (var part in parts)
+        {
+            if (string.Equals(part, "Ctrl", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(part, "Control", StringComparison.OrdinalIgnoreCase))
+            {
+                modifiers |= Win32.MOD_CONTROL;
+            }
+            else if (string.Equals(part, "Alt", StringComparison.OrdinalIgnoreCase))
+            {
+                modifiers |= Win32.MOD_ALT;
+            }
+            else if (string.Equals(part, "Shift", StringComparison.OrdinalIgnoreCase))
+            {
+                modifiers |= Win32.MOD_SHIFT;
+            }
+            else if (string.Equals(part, "Win", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(part, "Windows", StringComparison.OrdinalIgnoreCase))
+            {
+                modifiers |= Win32.MOD_WIN;
+            }
+            else
+            {
+                keyPart = part;
+            }
+        }
+
+        if (string.IsNullOrEmpty(keyPart))
+            return false;
+
+        if (keyPart.StartsWith("F", StringComparison.OrdinalIgnoreCase) &&
+            int.TryParse(keyPart[1..], out var fNum) && fNum is >= 1 and <= 24)
+        {
+            vk = (uint)(0x70 + (fNum - 1)); // VK_F1 = 0x70
+            return true;
+        }
+
+        if (keyPart.Length == 1 && char.IsLetter(keyPart[0]))
+        {
+            vk = char.ToUpperInvariant(keyPart[0]);
+            return true;
+        }
+
+        if (keyPart.Length == 1 && char.IsAsciiDigit(keyPart[0]))
+        {
+            vk = keyPart[0];
+            return true;
+        }
+
+        vk = keyPart.ToUpperInvariant() switch
+        {
+            "GRAVE" or "`" or "~" => 0xC0,
+            "TAB" => 0x09,
+            "SPACE" or "SPACEBAR" => 0x20,
+            "INSERT" or "INS" => 0x2D,
+            "DELETE" or "DEL" => 0x2E,
+            "HOME" => 0x24,
+            "END" => 0x23,
+            "PAGEUP" or "PGUP" => 0x21,
+            "PAGEDOWN" or "PGDN" => 0x22,
+            "PAUSE" or "BREAK" => 0x13,
+            "SCROLLLOCK" or "SCROLL" => 0x91,
+            _ => 0
+        };
+
+        return vk != 0;
     }
 
     private void UpdateResizeState()
@@ -221,8 +399,6 @@ public partial class MainWindow : Window
         if (ViewModel is not { } vm || e.Source is not Visual sourceVisual || OverlayPreviewCanvas is null || PreviewOverlay is null)
             return;
 
-        // The preview may have been hidden while the window first laid out. Recompute before
-        // reading Canvas.Left/Top so an unset attached value cannot poison the drag offset.
         UpdateOverlayPreviewPosition();
         if (OverlayPreviewCanvas.Bounds.Width <= 0 || OverlayPreviewCanvas.Bounds.Height <= 0)
             return;

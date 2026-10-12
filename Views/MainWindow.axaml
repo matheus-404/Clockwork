@@ -189,6 +189,14 @@
       <Setter Property="Background" Value="{DynamicResource ButtonPressed}" />
     </Style>
 
+    <Style Selector="TextBox.overlayInput">
+      <Setter Property="Background" Value="#10141A" />
+      <Setter Property="BorderBrush" Value="{DynamicResource CardBorder}" />
+      <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="Padding" Value="10,6" />
+    </Style>
+
   </Window.Styles>
 
   <Grid>
@@ -464,6 +472,83 @@
                               IsChecked="{Binding IncludeWindowedGames, Mode=TwoWay}"
                               AutomationProperties.Name="Include Windowed Games" />
               </Grid>
+            </StackPanel>
+          </Border>
+
+          <!-- Behavior & General Preferences -->
+          <Border Background="{DynamicResource CardBackground}"
+                  BorderBrush="{DynamicResource CardBorder}"
+                  BorderThickness="1"
+                  CornerRadius="12"
+                  Padding="18">
+            <StackPanel Spacing="16">
+              <TextBlock Text="Application Preferences"
+                         FontSize="16" FontWeight="SemiBold"
+                         Foreground="{DynamicResource TextPrimary}" />
+
+              <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Grid.Column="0" Spacing="3">
+                  <TextBlock Text="Start with Windows"
+                             Foreground="{DynamicResource TextPrimary}" />
+                  <TextBlock Text="Launch Clockwork automatically when signing into Windows."
+                             Foreground="{DynamicResource TextMuted}" />
+                </StackPanel>
+                <ToggleButton Grid.Column="1" Classes="switch"
+                              IsChecked="{Binding StartWithWindows, Mode=TwoWay}"
+                              AutomationProperties.Name="Start with Windows" />
+              </Grid>
+
+              <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Grid.Column="0" Spacing="3">
+                  <TextBlock Text="Start Minimized"
+                             Foreground="{DynamicResource TextPrimary}" />
+                  <TextBlock Text="Silently send Clockwork straight to the system tray on startup."
+                             Foreground="{DynamicResource TextMuted}" />
+                </StackPanel>
+                <ToggleButton Grid.Column="1" Classes="switch"
+                              IsChecked="{Binding StartMinimized, Mode=TwoWay}"
+                              AutomationProperties.Name="Start Minimized" />
+              </Grid>
+
+              <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Grid.Column="0" Spacing="3">
+                  <TextBlock Text="Overlay Toggle Hotkey"
+                             Foreground="{DynamicResource TextPrimary}" />
+                  <TextBlock Text="Global shortcut key used to show or hide the overlay in-game."
+                             Foreground="{DynamicResource TextMuted}" />
+                </StackPanel>
+                <TextBox Grid.Column="1"
+                         Classes="overlayInput"
+                         Text="{Binding ToggleHotkey, Mode=TwoWay}"
+                         Width="90"
+                         HorizontalAlignment="Right"
+                         TextAlignment="Center"
+                         FontFamily="Consolas,Cascadia Mono,monospace"
+                         FontSize="12" />
+              </Grid>
+            </StackPanel>
+          </Border>
+
+          <!-- Custom Ignored Applications -->
+          <Border Background="{DynamicResource CardBackground}"
+                  BorderBrush="{DynamicResource CardBorder}"
+                  BorderThickness="1"
+                  CornerRadius="12"
+                  Padding="18">
+            <StackPanel Spacing="10">
+              <TextBlock Text="Custom Ignored Applications"
+                         FontSize="16" FontWeight="SemiBold"
+                         Foreground="{DynamicResource TextPrimary}" />
+              <TextBlock Text="Extend the built-in blacklist by listing process names (without .exe) separated by newlines or commas. Clockwork will ignore these windows entirely."
+                         Foreground="{DynamicResource TextMuted}"
+                         TextWrapping="Wrap" />
+              <TextBox Classes="overlayInput"
+                       Text="{Binding CustomIgnoredApplicationsText, Mode=TwoWay}"
+                       AcceptsReturn="True"
+                       Height="80"
+                       FontFamily="Consolas,Cascadia Mono,monospace"
+                       FontSize="12"
+                       PlaceholderText="notepad, mycustomapp, blender..." />
             </StackPanel>
           </Border>
 

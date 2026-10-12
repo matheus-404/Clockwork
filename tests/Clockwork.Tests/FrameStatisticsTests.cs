@@ -113,7 +113,27 @@ public class FrameStatisticsTests
         Assert.Equal(100, copied);
         Assert.NotNull(low1);
         Assert.Equal(10.0, low1!.Value, 3);   // worst 1% of 100 frames is the single 100 ms frame
-        Assert.Null(low01);                   // needs at least 1000 frames
+        Assert.Null(low01);                   // 100 * 0.001 rounds to 0, requires >= 500 frames
+    }
+
+    [Fact]
+    public void Lows_SupportsThresholdFor01PercentAtRoundedCount()
+    {
+        // 499 frames: 499 * 0.001 = 0.499 -> rounds to 0 (null)
+        var samples499 = new double[499];
+        Array.Fill(samples499, 10.0);
+        var (low1_499, low01_499) = FrameStatistics.ComputeLows(samples499, 499);
+        Assert.NotNull(low1_499);
+        Assert.Null(low01_499);
+
+        // 500 frames: 500 * 0.001 = 0.5 -> rounds to 1 (calculates low01)
+        var samples500 = new double[500];
+        Array.Fill(samples500, 10.0);
+        samples500[0] = 20.0;
+        var (low1_500, low01_500) = FrameStatistics.ComputeLows(samples500, 500);
+        Assert.NotNull(low1_500);
+        Assert.NotNull(low01_500);
+        Assert.True(low01_500!.Value <= low1_500!.Value);
     }
 
     [Fact]
@@ -150,12 +170,40 @@ public class FrameStatisticsTests
     }
 
     [Fact]
+    public void CopyRecentFrameTimes_ExcludesIdleGaps()
+    {
+        var now = 1000 * Second;
+        var stats = new FrameStatistics();
+
+        // 3000 ms is an idle gap (>= 2000 ms) and must not be copied into lows calculation
+        stats.AddBatch(new[] { 16.6, 3000.0, 16.6 }, now);
+
+        var buffer = new double[16];
+        var copied = stats.CopyRecentFrameTimes(now, 60, buffer);
+
+        Assert.Equal(2, copied);
+        Assert.Equal(16.6, buffer[0], 1);
+        Assert.Equal(16.6, buffer[1], 1);
+    }
+
+    [Fact]
     public void CopyRecentFrameTimes_ReturnsNothingWhenStale()
     {
         var now = 1000 * Second;
         var stats = Steady(60, 2, now);
 
         Assert.Equal(0, stats.CopyRecentFrameTimes(now + 10 * Second, 60, new double[256]));
+    }
+
+    [Fact]
+    public void ComputeLows_ExcludesGapsFromCalculations()
+    {
+        var samples = new double[] { 10.0, 10.0, 10.0, 5000.0 }; // 5000.0 is an idle gap
+        var (low1, _) = FrameStatistics.ComputeLows(samples, samples.Length);
+
+        // Slowest valid frame among the 3 valid samples is 10.0 ms (100 FPS)
+        Assert.NotNull(low1);
+        Assert.Equal(100.0, low1!.Value, 1);
     }
 
     [Fact]

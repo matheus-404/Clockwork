@@ -54,10 +54,19 @@ internal static class Win32
                        WS_EX_LAYERED = 0x80000,
                        WS_EX_NOACTIVATE = 0x08000000;
 
+    public const int WM_HOTKEY = 0x0312;
+    public const uint MOD_ALT = 0x0001;
+    public const uint MOD_CONTROL = 0x0002;
+    public const uint MOD_SHIFT = 0x0004;
+    public const uint MOD_WIN = 0x0008;
+    public const uint MOD_NOREPEAT = 0x4000;
+
     private const nint HWND_TOPMOST = -1;
     private const uint SWP_NOSIZE = 0x0001;
     private const uint SWP_NOMOVE = 0x0002;
     private const uint SWP_NOACTIVATE = 0x0010;
+
+    private static readonly EnumWindowsProc s_enumWindowsProc = EnumWindowsCallback;
 
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
     public static extern nint GetWindowLongPtr(nint hWnd, int nIndex);
@@ -112,6 +121,14 @@ internal static class Win32
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, nint lParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool RegisterHotKey(nint hWnd, int id, uint fsModifiers, uint vk);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool UnregisterHotKey(nint hWnd, int id);
 
     [DllImport("ntdll.dll")]
     private static extern int NtQuerySystemInformation(
@@ -244,6 +261,44 @@ internal static class Win32
         }
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct EnumWindowsContext
+    {
+        public int TargetPid;
+        public nint BestVisible;
+        public nint BestAny;
+        public long BestArea;
+    }
+
+    private static unsafe bool EnumWindowsCallback(nint hwnd, nint lParam)
+    {
+        if (hwnd == 0)
+            return true;
+
+        var ctx = (EnumWindowsContext*)lParam;
+        GetWindowThreadProcessId(hwnd, out var rawPid);
+        if (rawPid != (uint)ctx->TargetPid || GetWindow(hwnd, GW_OWNER) != 0)
+            return true;
+
+        if (ctx->BestAny == 0)
+            ctx->BestAny = hwnd;
+
+        if (IsWindowVisible(hwnd) && !IsIconic(hwnd))
+        {
+            long area = 0;
+            if (GetClientRect(hwnd, out var rect))
+                area = Math.Max(0, rect.Right - rect.Left) * (long)Math.Max(0, rect.Bottom - rect.Top);
+
+            if (area > ctx->BestArea)
+            {
+                ctx->BestArea = area;
+                ctx->BestVisible = hwnd;
+            }
+        }
+
+        return true;
+    }
+
     public static bool TryGetMainWindowForProcess(int pid, nint cachedWindow, out nint window)
     {
         window = 0;
@@ -256,40 +311,21 @@ internal static class Win32
 
         try
         {
-            nint bestVisible = 0;
-            nint bestAny = 0;
-            long bestArea = -1;
-
-            EnumWindows((hwnd, _) =>
+            unsafe
             {
-                if (hwnd == 0)
-                    return true;
-
-                GetWindowThreadProcessId(hwnd, out var rawPid);
-                if (rawPid != (uint)pid || GetWindow(hwnd, GW_OWNER) != 0)
-                    return true;
-
-                if (bestAny == 0)
-                    bestAny = hwnd;
-
-                if (IsWindowVisible(hwnd) && !IsIconic(hwnd))
+                EnumWindowsContext context = new()
                 {
-                    long area = 0;
-                    if (GetClientRect(hwnd, out var rect))
-                        area = Math.Max(0, rect.Right - rect.Left) * (long)Math.Max(0, rect.Bottom - rect.Top);
+                    TargetPid = pid,
+                    BestVisible = 0,
+                    BestAny = 0,
+                    BestArea = -1,
+                };
 
-                    if (area > bestArea)
-                    {
-                        bestArea = area;
-                        bestVisible = hwnd;
-                    }
-                }
+                EnumWindows(s_enumWindowsProc, (nint)(&context));
 
-                return true;
-            }, 0);
-
-            window = bestVisible != 0 ? bestVisible : bestAny;
-            return window != 0;
+                window = context.BestVisible != 0 ? context.BestVisible : context.BestAny;
+                return window != 0;
+            }
         }
         catch
         {
@@ -479,6 +515,9 @@ internal sealed class GameDetector : IDisposable
     private static readonly long FreshTicks = Stopwatch.Frequency;
     private static readonly long MaxCacheTicks = Stopwatch.Frequency * 30;
 
+    private static readonly HashSet<string> s_customBlacklist = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly object s_customBlacklistSync = new();
+
     private readonly Win32.ProcessSnapshotTable _snapshots = new();
 
     private nint _cachedHwnd;
@@ -486,6 +525,23 @@ internal sealed class GameDetector : IDisposable
     private ProcessSnapshot _cachedProcess;
     private long _cachedAt;
     private long _trackedRefreshAt;
+
+    public static void SetCustomBlacklist(IEnumerable<string>? customNames)
+    {
+        lock (s_customBlacklistSync)
+        {
+            s_customBlacklist.Clear();
+            if (customNames is null)
+                return;
+
+            foreach (var name in customNames)
+            {
+                var normalized = NormalizeExecutableName(name);
+                if (normalized.Length > 0)
+                    s_customBlacklist.Add(normalized);
+            }
+        }
+    }
 
     public bool TryGet(bool includeWindowedGames, bool needFreshWorkingSet, out GameInfo game)
     {
@@ -584,7 +640,14 @@ internal sealed class GameDetector : IDisposable
     public static bool IsExecutableBlacklisted(string executableName)
     {
         var normalized = NormalizeExecutableName(executableName);
-        return normalized.Length > 0 && IgnoredApplications.ExecutableNames.Contains(normalized);
+        if (normalized.Length == 0)
+            return false;
+
+        if (IgnoredApplications.ExecutableNames.Contains(normalized))
+            return true;
+
+        lock (s_customBlacklistSync)
+            return s_customBlacklist.Contains(normalized);
     }
 
     public void Dispose() => _snapshots.Dispose();

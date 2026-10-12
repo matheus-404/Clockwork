@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using Velopack;
@@ -13,6 +14,9 @@ public sealed class AppUpdateService : IDisposable
 
     private readonly UpdateManager _updateManager;
     private readonly SemaphoreSlim _updateLock = new(1, 1);
+    private CancellationTokenSource? _periodicCts;
+    private Task? _periodicTask;
+    private bool _disposed;
 
     public AppUpdateService()
     {
@@ -26,6 +30,44 @@ public sealed class AppUpdateService : IDisposable
     public bool IsInstalled => _updateManager.IsInstalled;
 
     /// <summary>
+    /// Starts a background periodic timer to check for updates while the application
+    /// runs continuously in the tray.
+    /// </summary>
+    public void StartPeriodicChecks(TimeSpan interval, CancellationToken cancellationToken = default)
+    {
+        if (!IsInstalled || _disposed)
+            return;
+
+        _periodicCts?.Cancel();
+        _periodicCts?.Dispose();
+
+        _periodicCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var token = _periodicCts.Token;
+
+        _periodicTask = Task.Run(async () =>
+        {
+            using var timer = new PeriodicTimer(interval);
+            try
+            {
+                while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false))
+                {
+                    try
+                    {
+                        await CheckDownloadAndScheduleAsync(token).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        TelemetryDiagnostics.Write($"Periodic update check failed: {ex.Message}");
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }, token);
+    }
+
+    /// <summary>
     /// Checks for an update and downloads it in the background. The update is installed when
     /// Clockwork is closed; it never restarts the app mid-session. Returns true if an update
     /// was downloaded and scheduled.
@@ -33,22 +75,25 @@ public sealed class AppUpdateService : IDisposable
     public async Task<bool> CheckDownloadAndScheduleAsync(
         CancellationToken cancellationToken = default)
     {
-        if (!IsInstalled)
+        if (!IsInstalled || _disposed)
             return false;
 
-        await _updateLock.WaitAsync(cancellationToken);
+        await _updateLock.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         try
         {
-            var update =
-                await _updateManager.CheckForUpdatesAsync();
+            var update = await _updateManager.CheckForUpdatesAsync().ConfigureAwait(false);
 
             if (update is null)
                 return false;
 
+            TelemetryDiagnostics.Write($"Found Clockwork update: {update.TargetFullRelease.Version}. Downloading in background...");
+
             await _updateManager.DownloadUpdatesAsync(
                 update,
-                cancelToken: cancellationToken);
+                cancelToken: cancellationToken).ConfigureAwait(false);
+
+            TelemetryDiagnostics.Write($"Downloaded Clockwork update: {update.TargetFullRelease.Version}. Scheduled on exit.");
 
             // Install silently after Clockwork exits, without relaunching it. Velopack waits for
             // this process to end, so the overlay is never interrupted while a game is running.
@@ -59,6 +104,15 @@ public sealed class AppUpdateService : IDisposable
 
             return true;
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            TelemetryDiagnostics.Write($"App update check/download skipped: {ex.Message}");
+            return false;
+        }
         finally
         {
             _updateLock.Release();
@@ -67,6 +121,12 @@ public sealed class AppUpdateService : IDisposable
 
     public void Dispose()
     {
+        if (_disposed)
+            return;
+
+        _disposed = true;
+        _periodicCts?.Cancel();
+        _periodicCts?.Dispose();
         _updateLock.Dispose();
     }
 }

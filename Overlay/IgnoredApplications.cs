@@ -5,11 +5,58 @@ namespace Clockwork.Overlay;
 /// Matching is intentionally by executable name so installs and updates do not
 /// change the built-in blacklist. Names are compared without a trailing ".exe"
 /// (see GameDetector.NormalizeExecutableName), so entries must not include it.
-/// Very generic single-word names that real games could plausibly use were removed.
-/// This list is fixed in the application and is not user-editable.
+/// Users can also extend this list with custom process names.
 /// </summary>
 internal static class IgnoredApplications
 {
+    private static readonly HashSet<string> s_customNames = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly object s_customSync = new();
+
+    /// <summary>
+    /// Checks whether an executable is in the built-in blacklist or the user-defined blacklist.
+    /// </summary>
+    public static bool IsIgnored(string executableName)
+    {
+        var normalized = GameDetector.NormalizeExecutableName(executableName);
+        if (normalized.Length == 0)
+            return false;
+
+        if (ExecutableNames.Contains(normalized))
+            return true;
+
+        lock (s_customSync)
+            return s_customNames.Contains(normalized);
+    }
+
+    /// <summary>
+    /// Sets the list of user-specified ignored application names.
+    /// </summary>
+    public static void SetCustom(IEnumerable<string>? names)
+    {
+        lock (s_customSync)
+        {
+            s_customNames.Clear();
+            if (names is null)
+                return;
+
+            foreach (var name in names)
+            {
+                var normalized = GameDetector.NormalizeExecutableName(name);
+                if (normalized.Length > 0)
+                    s_customNames.Add(normalized);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Returns a copy of the user-extended ignore list.
+    /// </summary>
+    public static IReadOnlyCollection<string> GetCustom()
+    {
+        lock (s_customSync)
+            return s_customNames.ToArray();
+    }
+
     public static readonly HashSet<string> ExecutableNames = new(StringComparer.OrdinalIgnoreCase)
     {
         // Windows shell / system UI
@@ -85,7 +132,7 @@ internal static class IgnoredApplications
         "smath", "OpenOffice", "LibreOffice", "notepad", "Notepad3", "Notepad++", "wordpad",
         "write", "mspaint", "calc", "sticky notes", "StikyNot", "TeamsClassic",
         "Notion", "Evernote", "Obsidian", "Logseq", "Joplin", "StandardNotes",
-        "Todoist", "ticktick", "Trello", "Asana", "ClickUp", 
+        "Todoist", "ticktick", "Trello", "Asana", "ClickUp",
         "FoxitPDFEditor", "drawboard", "Kindle", "Calibre", "Zotero", "Mendeley",
 
         // Developer tools / terminals / IDEs
@@ -145,7 +192,7 @@ internal static class IgnoredApplications
 
         // Update / installer / maintenance shells
         "wuauclt", "UsoClient", "MoUsoCoreWorker", "TiWorker", "TrustedInstaller", "WindowsUpdateBox",
-        "setup", "setuphost", "installer", "unins000", "updater", 
+        "setup", "setuphost", "installer", "unins000", "updater",
         "AdobeARMservice", "GoogleUpdater", "GoogleUpdate", "MicrosoftEdgeUpdate", "OneDriveSetup",
         "DropboxUpdate", "SpotifyUpdate", "SteamUpdate", "EpicGamesLauncherUpdate",
 

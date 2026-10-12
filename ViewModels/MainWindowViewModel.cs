@@ -1,6 +1,7 @@
 using Avalonia.Threading;
 using Clockwork.Overlay;
 using Clockwork.Services;
+using Microsoft.Win32;
 
 namespace Clockwork.ViewModels;
 
@@ -18,6 +19,13 @@ public sealed class MainWindowViewModel : ViewModelBase
     private bool _overlayBackgroundEnabled = true;
     private double _overlayBackgroundOpacity = 94.0;
     private bool _includeWindowedGames = false;
+    private bool _startWithWindows = false;
+    private bool _startMinimized = false;
+    private bool _firstTimeCloseNoticeShown = false;
+    private string _toggleHotkey = "F11";
+    private List<string> _customIgnoredApplications = [];
+    private string _customIgnoredApplicationsText = string.Empty;
+
     private bool _suppressSettingsSave;
     private readonly DispatcherTimer _settingsSaveTimer = new() { Interval = TimeSpan.FromMilliseconds(400) };
     private bool _savePending;
@@ -35,12 +43,11 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
 
         sections.Add(new SectionViewModel("Overlay", Icon("Target.svg"),
-            "Choose where the overlay appears and how large it should be.",
+            "Choose where the overlay appears, how it looks, and general application preferences.",
             [],
             isOverlaySettings: true));
 
         Sections = sections;
-
         _selectedSection = Sections[0];
 
         var loaded = _settings.Load();
@@ -50,6 +57,19 @@ public sealed class MainWindowViewModel : ViewModelBase
         _overlayBackgroundEnabled = loaded.OverlayBackgroundEnabled;
         _overlayBackgroundOpacity = loaded.OverlayBackgroundOpacity;
         _includeWindowedGames = loaded.IncludeWindowedGames;
+        _startWithWindows = loaded.StartWithWindows;
+        _startMinimized = loaded.StartMinimized;
+        _firstTimeCloseNoticeShown = loaded.FirstTimeCloseNoticeShown;
+        _toggleHotkey = string.IsNullOrWhiteSpace(loaded.ToggleHotkey) ? "F11" : loaded.ToggleHotkey;
+
+        _customIgnoredApplications = loaded.CustomIgnoredApplications?.ToList() ?? [];
+        _customIgnoredApplicationsText = string.Join(Environment.NewLine, _customIgnoredApplications);
+
+        IgnoredApplications.SetCustom(_customIgnoredApplications);
+        GameDetector.SetCustomBlacklist(_customIgnoredApplications);
+
+        if (_startWithWindows)
+            SetStartWithWindowsRegistry(true);
 
         foreach (var section in Sections)
         {
@@ -160,6 +180,78 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
 
+    public bool StartWithWindows
+    {
+        get => _startWithWindows;
+        set
+        {
+            if (!SetField(ref _startWithWindows, value))
+                return;
+
+            SetStartWithWindowsRegistry(value);
+            RequestSettingsSave();
+        }
+    }
+
+    public bool StartMinimized
+    {
+        get => _startMinimized;
+        set
+        {
+            if (!SetField(ref _startMinimized, value))
+                return;
+
+            RequestSettingsSave();
+        }
+    }
+
+    public string ToggleHotkey
+    {
+        get => _toggleHotkey;
+        set
+        {
+            var trimmed = string.IsNullOrWhiteSpace(value) ? "F11" : value.Trim();
+            if (!SetField(ref _toggleHotkey, trimmed))
+                return;
+
+            RequestSettingsSave();
+        }
+    }
+
+    public string CustomIgnoredApplicationsText
+    {
+        get => _customIgnoredApplicationsText;
+        set
+        {
+            if (!SetField(ref _customIgnoredApplicationsText, value))
+                return;
+
+            var list = value
+                .Split(new[] { '\r', '\n', ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => s.Trim())
+                .Where(s => s.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            _customIgnoredApplications = list;
+            IgnoredApplications.SetCustom(list);
+            GameDetector.SetCustomBlacklist(list);
+            RequestSettingsSave();
+        }
+    }
+
+    public bool FirstTimeCloseNoticeShown
+    {
+        get => _firstTimeCloseNoticeShown;
+        set
+        {
+            if (!SetField(ref _firstTimeCloseNoticeShown, value))
+                return;
+
+            RequestSettingsSave();
+        }
+    }
+
     private void SubscribeToOptionChanges()
     {
         foreach (var section in Sections)
@@ -234,8 +326,36 @@ public sealed class MainWindowViewModel : ViewModelBase
             OverlayScale,
             OverlayBackgroundEnabled,
             OverlayBackgroundOpacity,
-            IncludeWindowedGames);
+            IncludeWindowedGames,
+            StartWithWindows,
+            StartMinimized,
+            FirstTimeCloseNoticeShown,
+            _customIgnoredApplications,
+            ToggleHotkey);
         _savePending = false;
+    }
+
+    private static void SetStartWithWindowsRegistry(bool enable)
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
+            if (key is null)
+                return;
+
+            var processPath = Environment.ProcessPath;
+            if (string.IsNullOrEmpty(processPath))
+                return;
+
+            if (enable)
+                key.SetValue("Clockwork", $"\"{processPath}\" --minimized");
+            else
+                key.DeleteValue("Clockwork", false);
+        }
+        catch (Exception ex)
+        {
+            TelemetryDiagnostics.Write($"Failed to update Start With Windows registry setting: {ex.Message}");
+        }
     }
 
     private static double ClampPosition(double value) =>
