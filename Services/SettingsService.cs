@@ -183,6 +183,7 @@ public sealed class SettingsService
                     FirstTimeCloseNoticeShown = firstTimeCloseNoticeShown,
                     CustomIgnoredApplications = customIgnoredApplications?
                         .Where(s => !string.IsNullOrWhiteSpace(s))
+                        .Select(s => s.Trim())
                         .Distinct(StringComparer.OrdinalIgnoreCase)
                         .ToList() ?? [],
                 },

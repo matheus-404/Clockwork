@@ -198,10 +198,13 @@ public class FrameStatisticsTests
     [Fact]
     public void ComputeLows_ExcludesGapsFromCalculations()
     {
-        var samples = new double[] { 10.0, 10.0, 10.0, 5000.0 }; // 5000.0 is an idle gap
+        var samples = new double[101];
+        Array.Fill(samples, 10.0);
+        samples[100] = 5000.0; // 5000.0 is an idle gap (>= 2000 ms) and must be excluded
+
         var (low1, _) = FrameStatistics.ComputeLows(samples, samples.Length);
 
-        // Slowest valid frame among the 3 valid samples is 10.0 ms (100 FPS)
+        // Slowest valid frame among the 100 valid samples is 10.0 ms (100 FPS)
         Assert.NotNull(low1);
         Assert.Equal(100.0, low1!.Value, 1);
     }
