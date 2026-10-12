@@ -53,6 +53,7 @@ public partial class MainWindow : Window
     private nint _oldWndProc;
     private WndProcDelegate? _wndProcDelegate;
     private bool _isHotkeyRegistered;
+    private bool _isRecordingHotkey;
 
     public MainWindow()
     {
@@ -133,6 +134,9 @@ public partial class MainWindow : Window
 
         if (e.PropertyName is nameof(MainWindowViewModel.ToggleHotkey))
         {
+            if (!_isRecordingHotkey && HotkeyRecorderButton is not null)
+                HotkeyRecorderButton.Content = ViewModel?.ToggleHotkey ?? MainWindowViewModel.DefaultToggleHotkey;
+
             UpdateHotkeyRegistration();
         }
     }
@@ -181,10 +185,19 @@ public partial class MainWindow : Window
             _isHotkeyRegistered = false;
         }
 
-        var hotkeyStr = ViewModel?.ToggleHotkey ?? "F11";
+        var hotkeyStr = ViewModel?.ToggleHotkey ?? MainWindowViewModel.DefaultToggleHotkey;
         if (TryParseHotkey(hotkeyStr, out var modifiers, out var vk))
         {
             _isHotkeyRegistered = Win32.RegisterHotKey(_hwnd, OverlayHotkeyId, modifiers, vk);
+        }
+
+        if (HotkeyRecorderButton is not null)
+        {
+            ToolTip.SetTip(
+                HotkeyRecorderButton,
+                _isHotkeyRegistered
+                    ? "Click to assign a new hotkey (Esc to cancel)"
+                    : "Failed to register hotkey with Windows (may conflict with another application)");
         }
     }
 
@@ -209,6 +222,112 @@ public partial class MainWindow : Window
                 overlay.ToggleVisibility();
             }
         }
+    }
+
+    private void OnHotkeyRecorderClick(object? sender, RoutedEventArgs e)
+    {
+        _isRecordingHotkey = true;
+        if (HotkeyRecorderButton is not null)
+        {
+            HotkeyRecorderButton.Content = "Press shortcut...";
+            HotkeyRecorderButton.Focus();
+        }
+    }
+
+    private void OnHotkeyRecorderKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (!_isRecordingHotkey)
+            return;
+
+        e.Handled = true;
+
+        if (e.Key == Key.Escape)
+        {
+            _isRecordingHotkey = false;
+            if (HotkeyRecorderButton is not null)
+                HotkeyRecorderButton.Content = ViewModel?.ToggleHotkey ?? MainWindowViewModel.DefaultToggleHotkey;
+            return;
+        }
+
+        if (IsModifierKey(e.Key))
+            return;
+
+        var formatted = FormatShortcut(e.KeyModifiers, e.Key);
+        if (formatted is not null && TryParseHotkey(formatted, out _, out _))
+        {
+            _isRecordingHotkey = false;
+            if (ViewModel is not null)
+                ViewModel.ToggleHotkey = formatted;
+
+            if (HotkeyRecorderButton is not null)
+                HotkeyRecorderButton.Content = formatted;
+        }
+    }
+
+    private void OnHotkeyRecorderLostFocus(object? sender, RoutedEventArgs e)
+    {
+        if (_isRecordingHotkey)
+        {
+            _isRecordingHotkey = false;
+            if (HotkeyRecorderButton is not null)
+                HotkeyRecorderButton.Content = ViewModel?.ToggleHotkey ?? MainWindowViewModel.DefaultToggleHotkey;
+        }
+    }
+
+    private void OnClearHotkeyClick(object? sender, RoutedEventArgs e)
+    {
+        _isRecordingHotkey = false;
+        if (ViewModel is not null)
+            ViewModel.ToggleHotkey = MainWindowViewModel.DefaultToggleHotkey;
+
+        if (HotkeyRecorderButton is not null)
+            HotkeyRecorderButton.Content = MainWindowViewModel.DefaultToggleHotkey;
+    }
+
+    private static bool IsModifierKey(Key key) =>
+        key is Key.LeftCtrl or Key.RightCtrl or
+               Key.LeftAlt or Key.RightAlt or
+               Key.LeftShift or Key.RightShift or
+               Key.LWin or Key.RWin;
+
+    private static string? FormatShortcut(KeyModifiers modifiers, Key key)
+    {
+        if (IsModifierKey(key))
+            return null;
+
+        var parts = new List<string>(5);
+
+        if (modifiers.HasFlag(KeyModifiers.Meta))
+            parts.Add("Win");
+        if (modifiers.HasFlag(KeyModifiers.Control))
+            parts.Add("Ctrl");
+        if (modifiers.HasFlag(KeyModifiers.Alt))
+            parts.Add("Alt");
+        if (modifiers.HasFlag(KeyModifiers.Shift))
+            parts.Add("Shift");
+
+        string keyStr = key switch
+        {
+            >= Key.F1 and <= Key.F24 => key.ToString(),
+            >= Key.A and <= Key.Z => key.ToString(),
+            >= Key.D0 and <= Key.D9 => ((char)('0' + (key - Key.D0))).ToString(),
+            >= Key.NumPad0 and <= Key.NumPad9 => ((char)('0' + (key - Key.NumPad0))).ToString(),
+            Key.OemTilde => "`",
+            Key.Tab => "Tab",
+            Key.Space => "Space",
+            Key.Insert => "Insert",
+            Key.Delete => "Delete",
+            Key.Home => "Home",
+            Key.End => "End",
+            Key.PageUp => "PageUp",
+            Key.PageDown => "PageDown",
+            Key.Pause => "Pause",
+            Key.Scroll => "ScrollLock",
+            _ => key.ToString()
+        };
+
+        parts.Add(keyStr);
+        return string.Join(" + ", parts);
     }
 
     private static bool TryParseHotkey(string? text, out uint modifiers, out uint vk)
@@ -244,6 +363,9 @@ public partial class MainWindow : Window
             }
             else
             {
+                if (keyPart is not null)
+                    return false;
+
                 keyPart = part;
             }
         }

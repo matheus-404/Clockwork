@@ -7,6 +7,8 @@ namespace Clockwork.ViewModels;
 
 public sealed class MainWindowViewModel : ViewModelBase
 {
+    public const string DefaultToggleHotkey = "Ctrl + Shift + O";
+
     private const string IconRoot = "avares://Clockwork/Assets/Icons/";
 
     private static string Icon(string fileName) => IconRoot + fileName;
@@ -22,7 +24,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     private bool _startWithWindows = false;
     private bool _startMinimized = false;
     private bool _firstTimeCloseNoticeShown = false;
-    private string _toggleHotkey = "F11";
+    private string _toggleHotkey = DefaultToggleHotkey;
     private List<string> _customIgnoredApplications = [];
     private string _customIgnoredApplicationsText = string.Empty;
 
@@ -60,7 +62,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         _startWithWindows = loaded.StartWithWindows;
         _startMinimized = loaded.StartMinimized;
         _firstTimeCloseNoticeShown = loaded.FirstTimeCloseNoticeShown;
-        _toggleHotkey = string.IsNullOrWhiteSpace(loaded.ToggleHotkey) ? "F11" : loaded.ToggleHotkey;
+        _toggleHotkey = string.IsNullOrWhiteSpace(loaded.ToggleHotkey) ? DefaultToggleHotkey : loaded.ToggleHotkey;
 
         _customIgnoredApplications = loaded.CustomIgnoredApplications?.ToList() ?? [];
         _customIgnoredApplicationsText = string.Join(Environment.NewLine, _customIgnoredApplications);
@@ -210,7 +212,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         get => _toggleHotkey;
         set
         {
-            var trimmed = string.IsNullOrWhiteSpace(value) ? "F11" : value.Trim();
+            var trimmed = string.IsNullOrWhiteSpace(value) ? DefaultToggleHotkey : value.Trim();
             if (!SetField(ref _toggleHotkey, trimmed))
                 return;
 

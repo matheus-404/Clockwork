@@ -20,7 +20,7 @@ public sealed class SettingsService
         public bool BackgroundEnabled { get; set; } = true;
         public double BackgroundOpacity { get; set; } = 94.0;
         public bool IncludeWindowedGames { get; set; } = false;
-        public string? ToggleHotkey { get; set; } = "F11";
+        public string? ToggleHotkey { get; set; } = "Ctrl + Shift + O";
     }
 
     private sealed class GeneralSettingsFile
@@ -43,7 +43,7 @@ public sealed class SettingsService
         bool StartMinimized = false,
         bool FirstTimeCloseNoticeShown = false,
         IReadOnlyList<string>? CustomIgnoredApplications = null,
-        string? ToggleHotkey = "F11");
+        string? ToggleHotkey = "Ctrl + Shift + O");
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -152,7 +152,7 @@ public sealed class SettingsService
         bool startMinimized = false,
         bool firstTimeCloseNoticeShown = false,
         IEnumerable<string>? customIgnoredApplications = null,
-        string? toggleHotkey = "F11")
+        string? toggleHotkey = "Ctrl + Shift + O")
     {
         try
         {
@@ -239,7 +239,7 @@ public sealed class SettingsService
                     file.General?.StartMinimized ?? false,
                     file.General?.FirstTimeCloseNoticeShown ?? false,
                     file.General?.CustomIgnoredApplications ?? [],
-                    file.Overlay?.ToggleHotkey ?? "F11");
+                    file.Overlay?.ToggleHotkey ?? "Ctrl + Shift + O");
             }
         }
 
@@ -268,7 +268,7 @@ public sealed class SettingsService
         false,
         false,
         [],
-        "F11");
+        "Ctrl + Shift + O");
 
     private static double ClampPosition(double value) => double.IsFinite(value) ? Math.Clamp(value, 0.0, 100.0) : 0.0;
     private static double ClampScale(double value) => double.IsFinite(value) ? Math.Clamp(value, 50.0, 200.0) : 100.0;

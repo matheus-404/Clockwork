@@ -517,14 +517,35 @@
                   <TextBlock Text="Global shortcut key used to show or hide the overlay in-game."
                              Foreground="{DynamicResource TextMuted}" />
                 </StackPanel>
-                <TextBox Grid.Column="1"
-                         Classes="overlayInput"
-                         Text="{Binding ToggleHotkey, Mode=TwoWay}"
-                         Width="90"
-                         HorizontalAlignment="Right"
-                         TextAlignment="Center"
-                         FontFamily="Consolas,Cascadia Mono,monospace"
-                         FontSize="12" />
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                  <Button x:Name="HotkeyRecorderButton"
+                          Classes="overlayReset"
+                          MinWidth="120"
+                          Height="32"
+                          Padding="10,0"
+                          HorizontalContentAlignment="Center"
+                          VerticalContentAlignment="Center"
+                          Content="{Binding ToggleHotkey}"
+                          FontFamily="Consolas,Cascadia Mono,monospace"
+                          FontSize="12"
+                          Click="OnHotkeyRecorderClick"
+                          KeyDown="OnHotkeyRecorderKeyDown"
+                          LostFocus="OnHotkeyRecorderLostFocus" />
+                  <Button x:Name="ClearHotkeyButton"
+                          Classes="overlayReset"
+                          Width="32"
+                          Height="32"
+                          Padding="0"
+                          HorizontalContentAlignment="Center"
+                          VerticalContentAlignment="Center"
+                          Click="OnClearHotkeyClick"
+                          ToolTip.Tip="Reset to default (Ctrl + Shift + O)">
+                    <Image Source="{Binding Source='avares://Clockwork/Assets/Icons/Window Controls Icons/Close.svg', Converter={StaticResource SvgConverter}}"
+                           Width="10"
+                           Height="10"
+                           Stretch="Uniform" />
+                  </Button>
+                </StackPanel>
               </Grid>
             </StackPanel>
           </Border>

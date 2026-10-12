@@ -47,7 +47,7 @@ public class SettingsServiceTests : IDisposable
         Assert.False(loaded.StartMinimized);
         Assert.False(loaded.FirstTimeCloseNoticeShown);
         Assert.Empty(loaded.CustomIgnoredApplications ?? []);
-        Assert.Equal("F11", loaded.ToggleHotkey);
+        Assert.Equal("Ctrl + Shift + O", loaded.ToggleHotkey);
     }
 
     [Fact]
