@@ -41,8 +41,7 @@ public partial class App : Application
                 string.Equals(a, "--minimized", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(a, "-minimized", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(a, "/minimized", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(a, "-m", StringComparison.OrdinalIgnoreCase)) ?? false)
-                || settings.StartMinimized;
+                string.Equals(a, "-m", StringComparison.OrdinalIgnoreCase)) ?? false);
 
             var vm = new MainWindowViewModel();
             var mainWindow = new MainWindow { DataContext = vm };

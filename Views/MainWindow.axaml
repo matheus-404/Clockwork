@@ -520,18 +520,6 @@
 
               <Grid ColumnDefinitions="*,Auto">
                 <StackPanel Grid.Column="0" Spacing="3">
-                  <TextBlock Text="Start Minimized"
-                             Foreground="{DynamicResource TextPrimary}" />
-                  <TextBlock Text="Silently send Clockwork straight to the system tray on startup."
-                             Foreground="{DynamicResource TextMuted}" />
-                </StackPanel>
-                <ToggleButton Grid.Column="1" Classes="switch"
-                              IsChecked="{Binding StartMinimized, Mode=TwoWay}"
-                              AutomationProperties.Name="Start Minimized" />
-              </Grid>
-
-              <Grid ColumnDefinitions="*,Auto">
-                <StackPanel Grid.Column="0" Spacing="3">
                   <TextBlock Text="Overlay Toggle Hotkey"
                              Foreground="{DynamicResource TextPrimary}" />
                   <TextBlock Text="Global shortcut key used to show or hide the overlay in-game."

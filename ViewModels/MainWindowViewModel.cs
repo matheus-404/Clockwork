@@ -22,7 +22,6 @@ public sealed class MainWindowViewModel : ViewModelBase
     private double _overlayBackgroundOpacity = 94.0;
     private bool _includeWindowedGames = false;
     private bool _startWithWindows = false;
-    private bool _startMinimized = false;
     private bool _firstTimeCloseNoticeShown = false;
     private string _toggleHotkey = DefaultToggleHotkey;
     private List<string> _customIgnoredApplications = [];
@@ -60,7 +59,6 @@ public sealed class MainWindowViewModel : ViewModelBase
         _overlayBackgroundOpacity = loaded.OverlayBackgroundOpacity;
         _includeWindowedGames = loaded.IncludeWindowedGames;
         _startWithWindows = loaded.StartWithWindows;
-        _startMinimized = loaded.StartMinimized;
         _firstTimeCloseNoticeShown = loaded.FirstTimeCloseNoticeShown;
         _toggleHotkey = string.IsNullOrWhiteSpace(loaded.ToggleHotkey) ? DefaultToggleHotkey : loaded.ToggleHotkey;
 
@@ -195,18 +193,6 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
 
-    public bool StartMinimized
-    {
-        get => _startMinimized;
-        set
-        {
-            if (!SetField(ref _startMinimized, value))
-                return;
-
-            RequestSettingsSave();
-        }
-    }
-
     public string ToggleHotkey
     {
         get => _toggleHotkey;
@@ -330,7 +316,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             OverlayBackgroundOpacity,
             IncludeWindowedGames,
             StartWithWindows,
-            StartMinimized,
+            startMinimized: false,
             FirstTimeCloseNoticeShown,
             _customIgnoredApplications,
             ToggleHotkey);
