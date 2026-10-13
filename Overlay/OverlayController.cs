@@ -33,6 +33,7 @@ public sealed class OverlayController : IDisposable
     private readonly object _stateSync = new();
     private readonly object _presentMonSync = new();
     private readonly object _uiUpdateSync = new();
+    private readonly object _detectionSync = new();
     private readonly Dictionary<string, OverlayLine> _lineByLabel = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _pendingUiUpdates = new(StatRegistry.Count, StringComparer.Ordinal);
     private readonly Action _applyPendingUiUpdatesAction;
@@ -100,13 +101,29 @@ public sealed class OverlayController : IDisposable
 
     public void ToggleVisibility()
     {
-        _overlayVisibleByHotkey = !_overlayVisibleByHotkey;
-        PostUi(() =>
+        var visible = !Volatile.Read(ref _overlayVisibleByHotkey);
+        Volatile.Write(ref _overlayVisibleByHotkey, visible);
+
+        if (!visible)
         {
-            if (!_overlayVisibleByHotkey)
-                HideOverlayOnly();
-            else
-                UpdateDetection();
+            // Hiding is instant and only needs the UI thread.
+            Volatile.Write(ref _overlayWanted, false);
+            PostUi(HideOverlayOnly);
+            return;
+        }
+
+        // Showing needs a detection pass. Run it off the UI thread; it serialises with the
+        // periodic detection loop through _detectionSync.
+        _ = Task.Run(() =>
+        {
+            if (_disposed)
+                return;
+
+            try { UpdateDetection(); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Debug.WriteLine($"[Clockwork] Hotkey detection failed: {ex}");
+            }
         });
     }
 
@@ -275,6 +292,14 @@ public sealed class OverlayController : IDisposable
     }
 
     private void UpdateDetection()
+    {
+        // The game detector, its native process snapshot buffer and the candidate debounce state
+        // are not thread-safe, so only one detection pass may run at a time.
+        lock (_detectionSync)
+            UpdateDetectionCore();
+    }
+
+    private void UpdateDetectionCore()
     {
         var enabled = Volatile.Read(ref _enabled);
 
@@ -529,23 +554,21 @@ public sealed class OverlayController : IDisposable
             }
         }
 
+        // Telemetry counts as "received" as soon as any enabled PresentMon statistic has a value,
+        // fast-owned ones included. The fast loop only runs once the overlay is visible, so it
+        // cannot be what makes the overlay appear in the first place.
+        if (!enabled.PresentMonAll.IsEmpty &&
+            !Volatile.Read(ref _hasReceivedTelemetry) &&
+            _presentMon.HasAnyValue(enabled.PresentMonAll))
+        {
+            Volatile.Write(ref _hasReceivedTelemetry, true);
+        }
+
         if (enabled.NormalSlots.Length == 0)
             return;
 
         if (!enabled.PresentMonNormal.IsEmpty)
-        {
             _presentMon.FillSnapshot(enabled.PresentMonNormal, _values);
-
-            for (var i = 0; i < enabled.NormalSlots.Length; i++)
-            {
-                var id = enabled.NormalSlots[i].Definition.Id;
-                if (_values[(int)id] is { } v && double.IsFinite(v))
-                {
-                    Volatile.Write(ref _hasReceivedTelemetry, true);
-                    break;
-                }
-            }
-        }
 
         var ram = enabled.NeedsRam ? Win32.GetRamUsage() : null;
         var now = DateTime.Now;
@@ -650,16 +673,6 @@ public sealed class OverlayController : IDisposable
         lastPublish = now;
         _presentMon.FillSnapshot(enabled.PresentMonFast, _fastValues);
 
-        for (var i = 0; i < enabled.FastSlots.Length; i++)
-        {
-            var id = enabled.FastSlots[i].Definition.Id;
-            if (_fastValues[(int)id] is { } v && double.IsFinite(v))
-            {
-                Volatile.Write(ref _hasReceivedTelemetry, true);
-                break;
-            }
-        }
-
         _fastUpdates.Clear();
         foreach (var slot in enabled.FastSlots)
         {
@@ -740,6 +753,10 @@ public sealed class OverlayController : IDisposable
     {
         if (_disposed || !ReferenceEquals(enabled, Volatile.Read(ref _enabled)))
             return;
+
+        // A detection pass that started before the hotkey hid the overlay must not re-show it.
+        if (showOverlay && !Volatile.Read(ref _overlayVisibleByHotkey))
+            showOverlay = false;
 
         if (game.Pid != _uiGamePid)
         {

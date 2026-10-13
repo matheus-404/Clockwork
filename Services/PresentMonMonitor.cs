@@ -39,6 +39,7 @@ public sealed class PresentMonMonitor : IDisposable
     private static readonly long InputLatencyExpiryTicks = Stopwatch.Frequency * 5;
     private static readonly long DroppedFrameHoldTicks = Stopwatch.Frequency * 2;
     private static readonly long LowsRefreshTicks = Stopwatch.Frequency;
+    private static readonly long FrameStaleTicks = (long)(FrameStatistics.StaleAfterMs * Stopwatch.Frequency / 1000.0);
 
     private readonly object _sync = new();
 
@@ -92,6 +93,7 @@ public sealed class PresentMonMonitor : IDisposable
     private long _gpuSamplesAt;
     private readonly TimedValue[] _values = new TimedValue[(int)MetricKey.Count];
     private long _lastDroppedFrameTs;
+    private long _lastFrameBatchTs;
 
     public bool IsAvailable => _session != 0 && _api is not null;
 
@@ -173,6 +175,7 @@ public sealed class PresentMonMonitor : IDisposable
             _frames.Reset();
             Array.Clear(_values);
             _lastDroppedFrameTs = 0;
+            _lastFrameBatchTs = 0;
             _gpuSamples.Clear();
             _gpuSamplesAt = 0;
             _low1 = null;
@@ -262,6 +265,33 @@ public sealed class PresentMonMonitor : IDisposable
                 values[(int)id] = ReadStat(id, now, gpu, low1, low01);
             }
         }
+    }
+
+    /// <summary>
+    /// True when at least one statistic in <paramref name="wanted"/> currently has a finite value.
+    /// Used to decide that telemetry has started flowing. The 1% and 0.1% lows are ignored because
+    /// they need history and would trigger the sort. Safe to call without the caller's native-call lock.
+    /// </summary>
+    public bool HasAnyValue(StatSet wanted)
+    {
+        wanted &= StatGroups.PresentMonBacked;
+        if (wanted.IsEmpty)
+            return false;
+
+        var now = Stopwatch.GetTimestamp();
+
+        lock (_sync)
+        {
+            var gpu = wanted.Intersects(StatGroups.Gpu) ? ChooseActiveGpu(now) : null;
+            for (var bits = wanted.Bits; bits != 0; bits &= bits - 1)
+            {
+                var id = (StatId)BitOperations.TrailingZeroCount(bits);
+                if (ReadStat(id, now, gpu, null, null) is { } value && double.IsFinite(value))
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -394,7 +424,9 @@ public sealed class PresentMonMonitor : IDisposable
         StatId.Low1Fps => low1,
         StatId.Low01Fps => low01,
         StatId.FrameTime => _frames.CalculateFrameTime(now),
-        StatId.DroppedFrames => _frames.IsStale(now)
+        // Uses its own "frames are still arriving" clock so it works even when no statistic
+        // that feeds the frame-history buffer is enabled.
+        StatId.DroppedFrames => _lastFrameBatchTs == 0 || now - _lastFrameBatchTs > FrameStaleTicks
             ? null
             : (now - _lastDroppedFrameTs < DroppedFrameHoldTicks ? 1.0 : 0.0),
         StatId.PresentedFps => GetRateMetric(MetricKey.PresentedFps, now, fallbackFromFrameTimes: true),
@@ -1075,6 +1107,9 @@ public sealed class PresentMonMonitor : IDisposable
 
                 if (anyDropped)
                     _lastDroppedFrameTs = now;
+
+                // Frames are still arriving, independent of the frame-history buffer.
+                _lastFrameBatchTs = now;
 
                 // Smooth out frame-event telemetry across the publish window instead of overwriting with the single last sample.
                 const double alpha = 0.25;

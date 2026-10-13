@@ -18,11 +18,9 @@ public partial class App : Application
     private CancellationTokenSource? _startupCts;
     private MainWindow? _mainWindow;
     private IClassicDesktopStyleApplicationLifetime? _desktop;
-    private SettingsService? _settingsService;
 
     private int _isInitialized;
     private int _hasAppliedInitialHide;
-    private bool _firstTimeCloseHintShown;
 
     public override void Initialize() => AvaloniaXamlLoader.Load(this);
 
@@ -33,16 +31,14 @@ public partial class App : Application
             desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnExplicitShutdown;
             _desktop = desktop;
 
-            _settingsService = new SettingsService();
-            var settings = _settingsService.Load();
-            _firstTimeCloseHintShown = settings.FirstTimeCloseNoticeShown;
-
             var startMinimized = (desktop.Args?.Any(a =>
                 string.Equals(a, "--minimized", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(a, "-minimized", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(a, "/minimized", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(a, "-m", StringComparison.OrdinalIgnoreCase)) ?? false);
 
+            // The view model is the only component that writes settings.json. It loads the
+            // saved state (including the first-close notice flag) and saves every value together.
             var vm = new MainWindowViewModel();
             var mainWindow = new MainWindow { DataContext = vm };
             _mainWindow = mainWindow;
@@ -59,17 +55,18 @@ public partial class App : Application
                 if (e.CloseReason is WindowCloseReason.ApplicationShutdown or WindowCloseReason.OSShutdown)
                     return;
 
-                if (!_firstTimeCloseHintShown)
-                {
-                    _firstTimeCloseHintShown = true;
-                    SaveFirstTimeHintSeen(vm);
+                if (vm.FirstTimeCloseNoticeShown)
+                    return;
 
-                    await StartupMessageBox.ShowAsync(
-                        mainWindow,
-                        "Running in Background",
-                        "Clockwork has minimized to your system tray to monitor games continuously.\n\n" +
-                        "Click or right-click the Clockwork tray icon to open settings or exit the app.");
-                }
+                // Updates the view model's own state and schedules the normal debounced save,
+                // so no other setting is reset and later saves keep the flag set.
+                vm.FirstTimeCloseNoticeShown = true;
+
+                await StartupMessageBox.ShowAsync(
+                    mainWindow,
+                    "Running in Background",
+                    "Clockwork has minimized to your system tray to monitor games continuously.\n\n" +
+                    "Click or right-click the Clockwork tray icon to open settings or exit the app.");
             };
 
             _startupCts = new CancellationTokenSource();
@@ -225,25 +222,6 @@ public partial class App : Application
         catch (Exception ex)
         {
             TelemetryDiagnostics.Write($"Application update check failed: {ex.Message}");
-        }
-    }
-
-    private void SaveFirstTimeHintSeen(MainWindowViewModel vm)
-    {
-        try
-        {
-            _settingsService?.Save(
-                vm.Sections.SelectMany(s => s.Options.Select(o => (o.Stat.Key, o.IsOn))),
-                vm.OverlayPositionX,
-                vm.OverlayPositionY,
-                vm.OverlayScale,
-                vm.OverlayBackgroundEnabled,
-                vm.OverlayBackgroundOpacity,
-                vm.IncludeWindowedGames,
-                firstTimeCloseNoticeShown: true);
-        }
-        catch
-        {
         }
     }
 

@@ -16,7 +16,16 @@ internal enum MsiSignatureStatus
     Invalid,
 }
 
-internal readonly record struct MsiSignatureResult(MsiSignatureStatus Status, string? Signer);
+/// <param name="Status">Whether the signature is present and trusted.</param>
+/// <param name="Signer">The full signer subject, for display in messages.</param>
+/// <param name="Organization">
+/// The single organization (O) value of the signer certificate, parsed from the distinguished
+/// name, or null when it is missing or ambiguous. This is what publisher checks should use.
+/// </param>
+internal readonly record struct MsiSignatureResult(
+    MsiSignatureStatus Status,
+    string? Signer,
+    string? Organization = null);
 
 /// <summary>
 /// Verifies the Authenticode signature of an MSI file using WinVerifyTrust for complete
@@ -82,7 +91,7 @@ internal static class MsiSignatureVerifier
             if (!HasCodeSigningEku(cert) || !VerifyCertificateChain(cert))
                 return new MsiSignatureResult(MsiSignatureStatus.Invalid, null);
 
-            return new MsiSignatureResult(MsiSignatureStatus.Valid, cert.Subject);
+            return new MsiSignatureResult(MsiSignatureStatus.Valid, cert.Subject, GetOrganization(cert));
         }
         catch
         {
@@ -92,6 +101,40 @@ internal static class MsiSignatureVerifier
         {
             if (certContext != IntPtr.Zero)
                 CertFreeCertificateContext(certContext);
+        }
+    }
+
+    private const string OrganizationOid = "2.5.4.10";
+
+    /// <summary>
+    /// Reads the organization (O) from the certificate subject using proper distinguished-name
+    /// parsing, so quoted commas and look-alike values cannot confuse it. Returns null unless
+    /// exactly one single-valued O component exists.
+    /// </summary>
+    private static string? GetOrganization(X509Certificate2 cert)
+    {
+        try
+        {
+            string? organization = null;
+            var count = 0;
+
+            foreach (var rdn in cert.SubjectName.EnumerateRelativeDistinguishedNames())
+            {
+                if (rdn.HasMultipleElements)
+                    continue;
+
+                if (!string.Equals(rdn.GetSingleElementType().Value, OrganizationOid, StringComparison.Ordinal))
+                    continue;
+
+                organization = rdn.GetSingleElementValue();
+                count++;
+            }
+
+            return count == 1 ? organization?.Trim() : null;
+        }
+        catch
+        {
+            return null;
         }
     }
 

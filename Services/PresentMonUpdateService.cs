@@ -205,7 +205,7 @@ public sealed class PresentMonUpdateService : IDisposable
                 return "The downloaded PresentMon MSI is not digitally signed.";
 
             case MsiSignatureStatus.Valid:
-                if (string.IsNullOrWhiteSpace(signature.Signer) || !IsValidSigner(signature.Signer))
+                if (!IsTrustedPublisher(signature.Organization))
                     return $"The downloaded PresentMon MSI is signed by an unexpected publisher ({signature.Signer ?? "unknown"}).";
                 return null;
 
@@ -216,29 +216,15 @@ public sealed class PresentMonUpdateService : IDisposable
         }
     }
 
-    private static bool IsValidSigner(string signer)
-    {
-        if (signer.Contains("Intel Corporation", StringComparison.OrdinalIgnoreCase))
-            return true;
+    /// <summary>
+    /// The organization (O) that must appear, exactly, in the signer certificate. The chain is
+    /// already validated to a trusted root by WinVerifyTrust, so a matching organization means a
+    /// certificate authority vouched for it. Substring or prefix matches are deliberately not accepted.
+    /// </summary>
+    private const string TrustedPublisherOrganization = "Intel Corporation";
 
-        foreach (var part in signer.Split(','))
-        {
-            var trimmed = part.Trim();
-            if (trimmed.StartsWith("O=", StringComparison.OrdinalIgnoreCase) ||
-                trimmed.StartsWith("CN=", StringComparison.OrdinalIgnoreCase))
-            {
-                var value = trimmed[3..].Trim('"', ' ');
-                if (string.Equals(value, "Intel", StringComparison.OrdinalIgnoreCase) ||
-                    value.StartsWith("Intel ", StringComparison.OrdinalIgnoreCase) ||
-                    value.StartsWith("Intel(", StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
+    internal static bool IsTrustedPublisher(string? organization) =>
+        string.Equals(organization?.Trim(), TrustedPublisherOrganization, StringComparison.OrdinalIgnoreCase);
 
     private static PresentMonStartupResult Fail(Version? installed, string message) =>
         installed is null
