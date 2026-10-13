@@ -24,40 +24,40 @@
   </Application.Styles>
 
   <Application.Resources>
-    <!-- Surfaces: neutral graphite with a subtle cool tint. -->
-    <SolidColorBrush x:Key="AppBackground" Color="#0F1115" />
-    <SolidColorBrush x:Key="SidebarBackground" Color="#12151A" />
-    <SolidColorBrush x:Key="PanelBorder" Color="#20252E" />
-    <SolidColorBrush x:Key="CardBackground" Color="#15191F" />
-    <SolidColorBrush x:Key="CardBorder" Color="#262C35" />
-    <SolidColorBrush x:Key="RowDivider" Color="#232932" />
-    <SolidColorBrush x:Key="NavHover" Color="#1A1F27" />
-    <SolidColorBrush x:Key="NavSelected" Color="#202734" />
+    <!-- Surfaces: Midnight slate tinted to harmonise with #6D8DFF -->
+    <SolidColorBrush x:Key="AppBackground" Color="#0C0E14" />
+    <SolidColorBrush x:Key="SidebarBackground" Color="#0F131D" />
+    <SolidColorBrush x:Key="PanelBorder" Color="#1E2536" />
+    <SolidColorBrush x:Key="CardBackground" Color="#151A26" />
+    <SolidColorBrush x:Key="CardBorder" Color="#242D42" />
+    <SolidColorBrush x:Key="RowDivider" Color="#1C2232" />
+    <SolidColorBrush x:Key="NavHover" Color="#192030" />
+    <SolidColorBrush x:Key="NavSelected" Color="#1E2842" />
 
     <!-- Title bar buttons -->
-    <SolidColorBrush x:Key="CaptionHover" Color="#1B2028" />
-    <SolidColorBrush x:Key="CaptionPressed" Color="#252B34" />
-    <SolidColorBrush x:Key="CaptionCloseHover" Color="#C6473B" />
-    <SolidColorBrush x:Key="CaptionClosePressed" Color="#A83B32" />
+    <SolidColorBrush x:Key="CaptionHover" Color="#181F2E" />
+    <SolidColorBrush x:Key="CaptionPressed" Color="#222B3D" />
+    <SolidColorBrush x:Key="CaptionCloseHover" Color="#E05252" />
+    <SolidColorBrush x:Key="CaptionClosePressed" Color="#B83A3A" />
 
     <!-- Text / icons -->
-    <SolidColorBrush x:Key="TextPrimary" Color="#EEF1F6" />
-    <SolidColorBrush x:Key="TextMuted" Color="#9AA3B2" />
-    <SolidColorBrush x:Key="TextSubtle" Color="#747D8C" />
+    <SolidColorBrush x:Key="TextPrimary" Color="#EDF1F7" />
+    <SolidColorBrush x:Key="TextMuted" Color="#939EB5" />
+    <SolidColorBrush x:Key="TextSubtle" Color="#647088" />
 
     <!-- Accent + switch -->
     <SolidColorBrush x:Key="Accent" Color="#6D8DFF" />
-    <SolidColorBrush x:Key="AccentHover" Color="#86A3FF" />
-    <SolidColorBrush x:Key="SwitchOff" Color="#303640" />
-    <SolidColorBrush x:Key="SwitchOffHover" Color="#3A424D" />
-    <SolidColorBrush x:Key="SwitchKnobOff" Color="#E3E7EE" />
+    <SolidColorBrush x:Key="AccentHover" Color="#829EFF" />
+    <SolidColorBrush x:Key="SwitchOff" Color="#252D3D" />
+    <SolidColorBrush x:Key="SwitchOffHover" Color="#2F394D" />
+    <SolidColorBrush x:Key="SwitchKnobOff" Color="#CBD3E1" />
     <SolidColorBrush x:Key="SwitchKnobOn" Color="#FFFFFF" />
 
     <!-- Secondary controls -->
-    <SolidColorBrush x:Key="ButtonBackground" Color="#1B2028" />
-    <SolidColorBrush x:Key="ButtonHover" Color="#232A34" />
-    <SolidColorBrush x:Key="ButtonPressed" Color="#2A323E" />
-    <SolidColorBrush x:Key="ButtonBorder" Color="#2A313C" />
+    <SolidColorBrush x:Key="ButtonBackground" Color="#1A202E" />
+    <SolidColorBrush x:Key="ButtonHover" Color="#222A3C" />
+    <SolidColorBrush x:Key="ButtonPressed" Color="#2A344A" />
+    <SolidColorBrush x:Key="ButtonBorder" Color="#283247" />
   </Application.Resources>
 
 </Application>

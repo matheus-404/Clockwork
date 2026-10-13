@@ -21,7 +21,7 @@ internal static class StartupMessageBox
             SizeToContent = SizeToContent.Height,
             CanResize = false,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            Background = new SolidColorBrush(Color.Parse("#0F1115")),
+            Background = new SolidColorBrush(Color.Parse("#0C0E14")),
             WindowDecorations = WindowDecorations.None,
             ExtendClientAreaToDecorationsHint = true,
             ExtendClientAreaTitleBarHeightHint = 40,
@@ -32,7 +32,7 @@ internal static class StartupMessageBox
         {
             Height = 40,
             Background = Brushes.Transparent,
-            BorderBrush = new SolidColorBrush(Color.Parse("#20252E")),
+            BorderBrush = new SolidColorBrush(Color.Parse("#1E2536")),
             BorderThickness = new Thickness(0, 0, 0, 1),
         };
 
@@ -46,7 +46,7 @@ internal static class StartupMessageBox
         {
             Text = "Clockwork",
             FontSize = 14,
-            Foreground = new SolidColorBrush(Color.Parse("#EEF1F6")),
+            Foreground = new SolidColorBrush(Color.Parse("#EDF1F7")),
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(16, 0, 0, 0),
             IsHitTestVisible = false,
@@ -62,7 +62,7 @@ internal static class StartupMessageBox
             BorderThickness = new Thickness(0),
             CornerRadius = new CornerRadius(0),
             Background = Brushes.Transparent,
-            Foreground = new SolidColorBrush(Color.Parse("#EEF1F6")),
+            Foreground = new SolidColorBrush(Color.Parse("#EDF1F7")),
             HorizontalContentAlignment = HorizontalAlignment.Center,
             VerticalContentAlignment = VerticalAlignment.Center,
             Tag = window,
@@ -81,7 +81,7 @@ internal static class StartupMessageBox
         };
 
         closeButton.PointerEntered += (_, _) =>
-            closeButton.Background = new SolidColorBrush(Color.Parse("#C6473B"));
+            closeButton.Background = new SolidColorBrush(Color.Parse("#E05252"));
         closeButton.PointerExited += (_, _) =>
             closeButton.Background = Brushes.Transparent;
         closeButton.Click += (_, _) => window.Close();
@@ -101,7 +101,7 @@ internal static class StartupMessageBox
             Text = title,
             FontSize = 18,
             FontWeight = FontWeight.Bold,
-            Foreground = new SolidColorBrush(Color.Parse("#EEF1F6")),
+            Foreground = new SolidColorBrush(Color.Parse("#EDF1F7")),
             Margin = new Thickness(0, 0, 0, 12),
         };
 
@@ -109,7 +109,7 @@ internal static class StartupMessageBox
         {
             Text = message,
             FontSize = 13,
-            Foreground = new SolidColorBrush(Color.Parse("#9AA3B2")),
+            Foreground = new SolidColorBrush(Color.Parse("#939EB5")),
             TextWrapping = TextWrapping.Wrap,
         };
 
@@ -130,13 +130,13 @@ internal static class StartupMessageBox
             FontSize = 13,
         };
         button.PointerEntered += (_, _) =>
-            button.Background = new SolidColorBrush(Color.Parse("#86A3FF"));
+            button.Background = new SolidColorBrush(Color.Parse("#829EFF"));
         button.PointerExited += (_, _) =>
             button.Background = new SolidColorBrush(Color.Parse("#6D8DFF"));
         button.PointerPressed += (_, _) =>
-            button.Background = new SolidColorBrush(Color.Parse("#5D7BE0"));
+            button.Background = new SolidColorBrush(Color.Parse("#5675EA"));
         button.PointerReleased += (_, _) =>
-            button.Background = new SolidColorBrush(Color.Parse("#86A3FF"));
+            button.Background = new SolidColorBrush(Color.Parse("#829EFF"));
         button.Click += (_, _) => window.Close();
 
         var content = new StackPanel

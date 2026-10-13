@@ -189,12 +189,32 @@
       <Setter Property="Background" Value="{DynamicResource ButtonPressed}" />
     </Style>
 
+    <!-- Custom Ignored Applications Input -->
     <Style Selector="TextBox.overlayInput">
-      <Setter Property="Background" Value="#10141A" />
+      <Setter Property="Background" Value="#0F131D" />
       <Setter Property="BorderBrush" Value="{DynamicResource CardBorder}" />
+      <Setter Property="BorderThickness" Value="1" />
       <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
       <Setter Property="CornerRadius" Value="6" />
-      <Setter Property="Padding" Value="10,6" />
+      <Setter Property="Padding" Value="10,8" />
+      <Setter Property="CaretBrush" Value="{DynamicResource Accent}" />
+      <Setter Property="SelectionBrush" Value="#2B3654" />
+      <Setter Property="SelectionForegroundBrush" Value="#FFFFFF" />
+    </Style>
+    <Style Selector="TextBox.overlayInput:pointerover /template/ Border#PART_BorderElement">
+      <Setter Property="Background" Value="#121722" />
+      <Setter Property="BorderBrush" Value="{DynamicResource PanelBorder}" />
+      <Setter Property="BorderThickness" Value="1" />
+    </Style>
+    <Style Selector="TextBox.overlayInput:focus /template/ Border#PART_BorderElement">
+      <Setter Property="Background" Value="#0D111A" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Accent}" />
+      <Setter Property="BorderThickness" Value="1" />
+    </Style>
+    <Style Selector="TextBox.overlayInput:focus:pointerover /template/ Border#PART_BorderElement">
+      <Setter Property="Background" Value="#0D111A" />
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentHover}" />
+      <Setter Property="BorderThickness" Value="1" />
     </Style>
 
   </Window.Styles>
@@ -315,7 +335,7 @@
 
               <controls:AspectRatioBorder x:Name="OverlayPreviewFrame"
                       Margin="0,6,0,0"
-                      Background="#080B11"
+                      Background="#0A0D14"
                       BorderBrush="{DynamicResource CardBorder}"
                       BorderThickness="1"
                       CornerRadius="0"
@@ -326,7 +346,7 @@
                 <Canvas x:Name="OverlayPreviewCanvas"
                         HorizontalAlignment="Stretch"
                         VerticalAlignment="Stretch"
-                        Background="#080B11"
+                        Background="#0A0D14"
                         SizeChanged="OnOverlayPreviewCanvasSizeChanged"
                         PointerPressed="OnOverlayPreviewPointerPressed"
                         PointerMoved="OnOverlayPreviewPointerMoved"
