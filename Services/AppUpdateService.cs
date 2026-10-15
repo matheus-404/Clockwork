@@ -16,6 +16,7 @@ public sealed class AppUpdateService : IDisposable
     private readonly SemaphoreSlim _updateLock = new(1, 1);
     private CancellationTokenSource? _periodicCts;
     private Task? _periodicTask;
+    private string? _scheduledVersion;
     private bool _disposed;
 
     public AppUpdateService()
@@ -87,13 +88,17 @@ public sealed class AppUpdateService : IDisposable
             if (update is null)
                 return false;
 
-            TelemetryDiagnostics.Write($"Found Clockwork update: {update.TargetFullRelease.Version}. Downloading in background...");
+            var targetVersion = update.TargetFullRelease.Version.ToString();
+            if (string.Equals(_scheduledVersion, targetVersion, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            TelemetryDiagnostics.Write($"Found Clockwork update: {targetVersion}. Downloading in background...");
 
             await _updateManager.DownloadUpdatesAsync(
                 update,
                 cancelToken: cancellationToken).ConfigureAwait(false);
 
-            TelemetryDiagnostics.Write($"Downloaded Clockwork update: {update.TargetFullRelease.Version}. Scheduled on exit.");
+            TelemetryDiagnostics.Write($"Downloaded Clockwork update: {targetVersion}. Scheduled on exit.");
 
             // Install silently after Clockwork exits, without relaunching it. Velopack waits for
             // this process to end, so the overlay is never interrupted while a game is running.
@@ -102,6 +107,7 @@ public sealed class AppUpdateService : IDisposable
                 silent: true,
                 restart: false);
 
+            _scheduledVersion = targetVersion;
             return true;
         }
         catch (OperationCanceledException)

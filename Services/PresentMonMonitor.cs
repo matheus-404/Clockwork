@@ -32,9 +32,16 @@ public sealed class PresentMonMonitor : IDisposable
     /// </summary>
     internal const double DynamicWindowMs = 250.0;
 
-    /// <summary>How long the lows window looks back.</summary>
-    internal const double LowsWindowSeconds = 60.0;
+    /// <summary>
+    /// Time constant (τ) in milliseconds for time-based exponential smoothing of per-frame metrics,
+    /// keeping smoothing consistent whether ConsumeFrames runs every 16 ms, 100 ms, or 500 ms.
+    /// </summary>
+    internal const double FrameSmoothingTauMs = 250.0;
 
+    /// <summary>How long the lows window looks back.</summary>
+    internal const double LowsWindowSeconds = 10.0;
+
+    private static readonly double FrameSmoothingTauTicks = Stopwatch.Frequency * (FrameSmoothingTauMs / 1000.0);
     private static readonly long ValueExpiryTicks = Stopwatch.Frequency * 3;
     private static readonly long InputLatencyExpiryTicks = Stopwatch.Frequency * 5;
     private static readonly long DroppedFrameHoldTicks = Stopwatch.Frequency * 2;
@@ -271,7 +278,7 @@ public sealed class PresentMonMonitor : IDisposable
 
         lock (_sync)
         {
-            var gpu = wanted.Intersects(StatGroups.Gpu) ? ChooseActiveGpu(now) : null;
+            var gpu = wanted.Intersects(StatGroups.Gpu) ? ChooseActiveGpu(now, wanted) : null;
             for (var bits = wanted.Bits; bits != 0; bits &= bits - 1)
             {
                 var id = (StatId)BitOperations.TrailingZeroCount(bits);
@@ -295,7 +302,7 @@ public sealed class PresentMonMonitor : IDisposable
 
         lock (_sync)
         {
-            var gpu = wanted.Intersects(StatGroups.Gpu) ? ChooseActiveGpu(now) : null;
+            var gpu = wanted.Intersects(StatGroups.Gpu) ? ChooseActiveGpu(now, wanted) : null;
             for (var bits = wanted.Bits; bits != 0; bits &= bits - 1)
             {
                 var id = (StatId)BitOperations.TrailingZeroCount(bits);
@@ -364,6 +371,24 @@ public sealed class PresentMonMonitor : IDisposable
         StatId.BetweenPresents => PresentMonNative.PM_METRIC.BETWEEN_PRESENTS,
         StatId.BetweenDisplayChanges => PresentMonNative.PM_METRIC.BETWEEN_DISPLAY_CHANGE,
         StatId.InputToPhotonLatency => PresentMonNative.PM_METRIC.ALL_INPUT_TO_PHOTON_LATENCY,
+        _ => null,
+    };
+
+    private static MetricKey? GpuMetricKeyForStat(StatId id) => id switch
+    {
+        StatId.GpuTemperature => MetricKey.GpuTemp,
+        StatId.GpuCoreClock => MetricKey.GpuCoreClock,
+        StatId.GpuMemoryClock => MetricKey.GpuMemClock,
+        StatId.GpuVramUsage => MetricKey.GpuVram,
+        StatId.GpuVramPercent => MetricKey.GpuVramUtil,
+        StatId.GpuPower => MetricKey.GpuPower,
+        StatId.GpuUsage => MetricKey.GpuUsage,
+        StatId.GpuRenderCompute => MetricKey.GpuRenderCompute,
+        StatId.GpuPowerLimited => MetricKey.GpuPowerLimited,
+        StatId.GpuTemperatureLimited => MetricKey.GpuTempLimited,
+        StatId.GpuCurrentLimited => MetricKey.GpuCurrentLimited,
+        StatId.GpuVoltageLimited => MetricKey.GpuVoltageLimited,
+        StatId.GpuUtilizationLimited => MetricKey.GpuUtilLimited,
         _ => null,
     };
 
@@ -887,8 +912,18 @@ public sealed class PresentMonMonitor : IDisposable
         if (stats.Contains(StatId.GpuVramUsage)) AddGpuScalar(specs, PresentMonNative.PM_METRIC.GPU_MEM_USED, MetricKey.GpuVram);
         if (stats.Contains(StatId.GpuVramPercent)) AddGpuScalar(specs, PresentMonNative.PM_METRIC.GPU_MEM_UTILIZATION, MetricKey.GpuVramUtil);
         if (stats.Contains(StatId.GpuPower)) AddGpuScalar(specs, PresentMonNative.PM_METRIC.GPU_POWER, MetricKey.GpuPower);
-        if (stats.Contains(StatId.GpuUsage)) AddGpuScalar(specs, PresentMonNative.PM_METRIC.GPU_UTILIZATION, MetricKey.GpuUsage);
-        if (stats.Contains(StatId.GpuRenderCompute)) AddGpuScalar(specs, PresentMonNative.PM_METRIC.GPU_RENDER_COMPUTE_UTILIZATION, MetricKey.GpuRenderCompute);
+
+        // GPU utilization selects the active adapter in ChooseActiveGpu, so it is registered
+        // whenever any polled GPU statistic is on (once, never twice). If GPU_UTILIZATION is
+        // not supported on the system, fall back to GPU_RENDER_COMPUTE_UTILIZATION.
+        if (stats.Intersects(StatGroups.Gpu))
+            AddGpuScalar(specs, PresentMonNative.PM_METRIC.GPU_UTILIZATION, MetricKey.GpuUsage);
+        if (stats.Contains(StatId.GpuRenderCompute) ||
+            (stats.Intersects(StatGroups.Gpu) && !HasGpuMetric(PresentMonNative.PM_METRIC.GPU_UTILIZATION)))
+        {
+            AddGpuScalar(specs, PresentMonNative.PM_METRIC.GPU_RENDER_COMPUTE_UTILIZATION, MetricKey.GpuRenderCompute);
+        }
+
         if (stats.Contains(StatId.GpuPowerLimited)) AddGpuScalar(specs, PresentMonNative.PM_METRIC.GPU_POWER_LIMITED, MetricKey.GpuPowerLimited);
         if (stats.Contains(StatId.GpuTemperatureLimited)) AddGpuScalar(specs, PresentMonNative.PM_METRIC.GPU_TEMPERATURE_LIMITED, MetricKey.GpuTempLimited);
         if (stats.Contains(StatId.GpuCurrentLimited)) AddGpuScalar(specs, PresentMonNative.PM_METRIC.GPU_CURRENT_LIMITED, MetricKey.GpuCurrentLimited);
@@ -897,6 +932,12 @@ public sealed class PresentMonMonitor : IDisposable
 
         return specs;
     }
+
+    private bool HasGpuMetric(PresentMonNative.PM_METRIC metric) =>
+        _metrics.TryGetValue(metric, out var info) &&
+        (info.MetricType == PresentMonNative.PM_METRIC_TYPE.DYNAMIC ||
+         info.MetricType == PresentMonNative.PM_METRIC_TYPE.DYNAMIC_FRAME) &&
+        ResolveGpuMetricDeviceIds(info).Any();
 
     private List<QuerySpec> CollectFrameSpecs(StatSet stats)
     {
@@ -1081,6 +1122,12 @@ public sealed class PresentMonMonitor : IDisposable
         // Allocate once on the method frame to satisfy CA2014
         Span<double> metricSums = stackalloc double[(int)MetricKey.Count];
         Span<int> metricCounts = stackalloc int[(int)MetricKey.Count];
+        metricSums.Clear();
+        metricCounts.Clear();
+
+        var anyDropped = false;
+        var anyFrames = false;
+        long lastBatchTs = 0;
 
         while (true)
         {
@@ -1097,14 +1144,13 @@ public sealed class PresentMonMonitor : IDisposable
                 break;
 
             var now = Stopwatch.GetTimestamp();
+            lastBatchTs = now;
+            anyFrames = true;
+
             lock (_sync)
             {
                 var stride = (int)_frameBlobSize;
                 var batchCount = 0;
-
-                metricSums.Clear();
-                metricCounts.Clear();
-                var anyDropped = false;
 
                 // Reads each frame's swap chain and decides which chain is the game's. Frames
                 // from any other chain (overlays, launchers, extra windows) are skipped below.
@@ -1155,38 +1201,48 @@ public sealed class PresentMonMonitor : IDisposable
                     }
                 }
 
-                if (anyDropped)
-                    _lastDroppedFrameTs = now;
-
-                // Frames are still arriving, independent of the frame-history buffer.
-                _lastFrameBatchTs = now;
-
-                // Smooth out frame-event telemetry across the publish window instead of overwriting with the single last sample.
-                const double alpha = 0.25;
-                for (var k = 0; k < (int)MetricKey.Count; k++)
-                {
-                    if (metricCounts[k] == 0)
-                        continue;
-
-                    var batchAvg = metricSums[k] / metricCounts[k];
-                    var existing = _values[k];
-                    if (existing.Timestamp == 0 || now - existing.Timestamp > ValueExpiryTicks)
-                    {
-                        _values[k] = new TimedValue(batchAvg, now);
-                    }
-                    else
-                    {
-                        var smoothed = (existing.Value * (1.0 - alpha)) + (batchAvg * alpha);
-                        _values[k] = new TimedValue(smoothed, now);
-                    }
-                }
-
                 if (batchCount > 0)
                     _frames.AddBatch(_frameScratch.AsSpan(0, batchCount), now);
             }
 
             if (requested < FrameBufferCapacity)
                 break;
+        }
+
+        if (!anyFrames)
+            return;
+
+        lock (_sync)
+        {
+            if (anyDropped)
+                _lastDroppedFrameTs = lastBatchTs;
+
+            // Frames are still arriving, independent of the frame-history buffer.
+            _lastFrameBatchTs = lastBatchTs;
+
+            // Smooth frame-event telemetry using a time-based EMA (1 - exp(-dt / τ)) so the
+            // smoothing response is identical whether ConsumeFrames runs every 16 ms, 100 ms, or 500 ms.
+            for (var k = 0; k < (int)MetricKey.Count; k++)
+            {
+                if (metricCounts[k] == 0)
+                    continue;
+
+                var batchAvg = metricSums[k] / metricCounts[k];
+                var existing = _values[k];
+                var expiry = IsInputLatencyKey((MetricKey)k) ? InputLatencyExpiryTicks : ValueExpiryTicks;
+                var dtTicks = lastBatchTs - existing.Timestamp;
+
+                if (existing.Timestamp == 0 || dtTicks > expiry)
+                {
+                    _values[k] = new TimedValue(batchAvg, lastBatchTs);
+                }
+                else if (dtTicks > 0)
+                {
+                    var alpha = 1.0 - Math.Exp(-dtTicks / FrameSmoothingTauTicks);
+                    var smoothed = existing.Value + (batchAvg - existing.Value) * alpha;
+                    _values[k] = new TimedValue(smoothed, lastBatchTs);
+                }
+            }
         }
     }
 
@@ -1293,6 +1349,14 @@ public sealed class PresentMonMonitor : IDisposable
         var first = _primaryChain == 0;
         _primaryChain = chain;
 
+        if (!first)
+        {
+            _frames.ClearHistory();
+            _low1 = null;
+            _low01 = null;
+            _lowsComputedAt = 0;
+        }
+
         // Only worth a log line when there is actually more than one chain to choose between.
         if (_chainTally.Count > 1 || !first)
             TelemetryDiagnostics.Write($"PresentMon: using swap chain 0x{chain:X} for frame statistics ({_chainTally.Count} seen).");
@@ -1375,15 +1439,17 @@ public sealed class PresentMonMonitor : IDisposable
         return fallbackFromFrameTimes ? _frames.CalculateFps(now) : null;
     }
 
-    private GpuSample? ChooseActiveGpu(long now)
+    private GpuSample? ChooseActiveGpu(long now, StatSet wanted)
     {
         if (_gpuSamples.Count == 0 || now - _gpuSamplesAt > ValueExpiryTicks)
             return null;
 
+        var wantedGpu = wanted & StatGroups.Gpu;
+
         var anyGraphics = false;
         foreach (var sample in _gpuSamples.Values)
         {
-            if (IsGraphicsDevice(sample) && sample.HasUsefulData(now))
+            if (IsGraphicsDevice(sample) && sample.HasDataFor(wantedGpu, now))
             {
                 anyGraphics = true;
                 break;
@@ -1393,25 +1459,44 @@ public sealed class PresentMonMonitor : IDisposable
         GpuSample? best = null;
         foreach (var sample in _gpuSamples.Values)
         {
-            if (!sample.HasUsefulData(now))
+            if (!sample.HasDataFor(wantedGpu, now))
                 continue;
 
             if (anyGraphics && !IsGraphicsDevice(sample))
                 continue;
 
-            if (best is null)
-            {
-                best = sample;
-                continue;
-            }
-
-            var usage = sample.Get(MetricKey.GpuUsage, now) ?? -1;
-            var bestUsage = best.Get(MetricKey.GpuUsage, now) ?? -1;
-            if (usage > bestUsage)
+            if (best is null || IsMoreActiveGpu(sample, best, now))
                 best = sample;
         }
 
         return best;
+    }
+
+    private static bool IsMoreActiveGpu(GpuSample candidate, GpuSample current, long now)
+    {
+        var candidateUsage = candidate.Get(MetricKey.GpuUsage, now)
+            ?? candidate.Get(MetricKey.GpuRenderCompute, now)
+            ?? -1;
+        var currentUsage = current.Get(MetricKey.GpuUsage, now)
+            ?? current.Get(MetricKey.GpuRenderCompute, now)
+            ?? -1;
+
+        if (candidateUsage != currentUsage)
+            return candidateUsage > currentUsage;
+
+        var candidatePower = candidate.Get(MetricKey.GpuPower, now) ?? -1;
+        var currentPower = current.Get(MetricKey.GpuPower, now) ?? -1;
+        if (candidatePower != currentPower)
+            return candidatePower > currentPower;
+
+        var candidateClock = candidate.Get(MetricKey.GpuCoreClock, now) ?? -1;
+        var currentClock = current.Get(MetricKey.GpuCoreClock, now) ?? -1;
+        if (candidateClock != currentClock)
+            return candidateClock > currentClock;
+
+        var candidateVram = candidate.Get(MetricKey.GpuVram, now) ?? -1;
+        var currentVram = current.Get(MetricKey.GpuVram, now) ?? -1;
+        return candidateVram > currentVram;
     }
 
     private bool IsGraphicsDevice(GpuSample sample) =>
@@ -1836,12 +1921,16 @@ public sealed class PresentMonMonitor : IDisposable
             return entry.Value;
         }
 
-        internal bool HasUsefulData(long now) =>
-            Get(MetricKey.GpuTemp, now).HasValue ||
-            Get(MetricKey.GpuCoreClock, now).HasValue ||
-            Get(MetricKey.GpuPower, now).HasValue ||
-            Get(MetricKey.GpuUsage, now).HasValue ||
-            Get(MetricKey.GpuVram, now).HasValue ||
-            Get(MetricKey.GpuRenderCompute, now).HasValue;
+        internal bool HasDataFor(StatSet wantedGpu, long now)
+        {
+            for (var bits = wantedGpu.Bits; bits != 0; bits &= bits - 1)
+            {
+                var id = (StatId)BitOperations.TrailingZeroCount(bits);
+                if (GpuMetricKeyForStat(id) is { } key && Get(key, now).HasValue)
+                    return true;
+            }
+
+            return false;
+        }
     }
 }

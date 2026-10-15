@@ -47,7 +47,8 @@
                 Background="#F0000000"
                 Padding="4,3"
                 CornerRadius="1">
-            <ItemsControl ItemsSource="{Binding Lines}">
+            <ItemsControl ItemsSource="{Binding Lines}"
+                          Grid.IsSharedSizeScope="True">
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
                         <StackPanel />
@@ -56,7 +57,12 @@
 
                 <ItemsControl.DataTemplates>
                     <DataTemplate x:DataType="vm:OverlayLine">
-                        <Grid ColumnDefinitions="Auto,Auto" MinHeight="16">
+                        <Grid MinHeight="16">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" SharedSizeGroup="OverlayLabel" />
+                                <ColumnDefinition Width="104" />
+                            </Grid.ColumnDefinitions>
+
                             <TextBlock Grid.Column="0"
                                        Text="{Binding Label}"
                                        Classes="overlayLabel"
@@ -76,8 +82,7 @@
                                        VerticalAlignment="Center"
                                        HorizontalAlignment="Left"
                                        TextAlignment="Left"
-                                       MinWidth="48"
-                                       Margin="6,0,0,0"
+                                       Margin="8,0,0,0"
                                        FontFamily="Consolas,Cascadia Mono,monospace"
                                        TextWrapping="NoWrap" />
                         </Grid>

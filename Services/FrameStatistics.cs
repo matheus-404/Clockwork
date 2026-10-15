@@ -65,6 +65,15 @@ public sealed class FrameStatistics
     }
 
     /// <summary>
+    /// Clears the ring buffer of frame times while preserving the running average FPS state.
+    /// </summary>
+    public void ClearHistory()
+    {
+        _head = 0;
+        _count = 0;
+    }
+
+    /// <summary>
     /// Turns the running average on or off. Any change restarts the measurement; calling it with
     /// the current state is a no-op, so toggling unrelated statistics never resets the average.
     /// </summary>

@@ -61,6 +61,8 @@ internal static class Win32
     public const uint MOD_WIN = 0x0008;
     public const uint MOD_NOREPEAT = 0x4000;
 
+    private const int MDT_EFFECTIVE_DPI = 0;
+
     private const nint HWND_TOPMOST = -1;
     private const uint SWP_NOSIZE = 0x0001;
     private const uint SWP_NOMOVE = 0x0002;
@@ -90,6 +92,9 @@ internal static class Win32
     [DllImport("user32.dll", EntryPoint = "GetMonitorInfoW")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool GetMonitorInfo(nint hMonitor, ref MONITORINFO mi);
+
+    [DllImport("shcore.dll")]
+    private static extern int GetDpiForMonitor(nint hmonitor, int dpiType, out uint dpiX, out uint dpiY);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -158,6 +163,30 @@ internal static class Win32
         try
         {
             return SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static bool TryGetMonitorScale(nint hwnd, out double scale)
+    {
+        scale = 1.0;
+        if (hwnd == 0)
+            return false;
+
+        try
+        {
+            var monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            if (monitor == 0)
+                return false;
+
+            if (GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, out var dpiX, out _) != 0 || dpiX == 0)
+                return false;
+
+            scale = dpiX / 96.0;
+            return double.IsFinite(scale) && scale > 0.0;
         }
         catch
         {

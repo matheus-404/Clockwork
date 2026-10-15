@@ -1,13 +1,10 @@
-using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
-using Avalonia.Threading;
 
 namespace Clockwork.Overlay;
 
 public partial class OverlayWindow : Window
 {
-    private readonly DispatcherTimer _topmostTimer;
     private double _lastScale = double.NaN;
     private bool _lastBackgroundEnabled;
     private byte _lastBackgroundAlpha;
@@ -16,14 +13,6 @@ public partial class OverlayWindow : Window
     public OverlayWindow()
     {
         InitializeComponent();
-
-        _topmostTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromSeconds(2),
-        };
-        _topmostTimer.Tick += OnTopmostTimerTick;
-
-        PropertyChanged += OnWindowPropertyChanged;
     }
 
     public void SetScale(double scale)
@@ -81,38 +70,6 @@ public partial class OverlayWindow : Window
     {
         base.OnOpened(e);
         EnsureTopmost();
-        if (IsVisible)
-            _topmostTimer.Start();
-    }
-
-    protected override void OnClosed(EventArgs e)
-    {
-        _topmostTimer.Stop();
-        base.OnClosed(e);
-    }
-
-    private void OnTopmostTimerTick(object? sender, EventArgs e)
-    {
-        if (IsVisible)
-            EnsureTopmost();
-        else
-            _topmostTimer.Stop();
-    }
-
-    private void OnWindowPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
-    {
-        if (e.Property == IsVisibleProperty)
-        {
-            if (IsVisible)
-            {
-                EnsureTopmost();
-                _topmostTimer.Start();
-            }
-            else
-            {
-                _topmostTimer.Stop();
-            }
-        }
     }
 
     private static void ApplyExtendedStyles(nint hwnd)

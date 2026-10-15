@@ -80,6 +80,36 @@ public class FrameStatisticsTests
     }
 
     [Fact]
+    public void ClearHistory_RemovesRingBufferFrames_ButKeepsRunningAverage()
+    {
+        var now = 1000 * Second;
+        var stats = new FrameStatistics();
+        stats.SetAverageActive(true);
+
+        // Simulate slow loading-screen frames under the 2000 ms gap threshold (e.g., 1000 ms = 1 FPS)
+        stats.AddBatch(Enumerable.Repeat(1000.0, 10).ToArray(), now);
+
+        // Primary swap chain changes -> clear frame history
+        stats.ClearHistory();
+
+        Assert.Equal(0, stats.Count);
+        Assert.NotNull(stats.CalculateAverageFps());
+
+        // Add 100 FPS gameplay frames (10 ms)
+        var later = now + 2 * Second;
+        stats.AddBatch(Enumerable.Repeat(10.0, 200).ToArray(), later);
+
+        var buffer = new double[256];
+        var copied = stats.CopyRecentFrameTimes(later, PresentMonMonitor.LowsWindowSeconds, buffer);
+        var (low1, _) = FrameStatistics.ComputeLows(buffer, copied);
+
+        Assert.Equal(200, copied);
+        Assert.NotNull(low1);
+        Assert.InRange(low1!.Value, 99.9, 100.1);
+        Assert.NotNull(stats.CalculateAverageFps());
+    }
+
+    [Fact]
     public void RingBuffer_KeepsOnlyTheNewestFrames()
     {
         var stats = new FrameStatistics(8);
