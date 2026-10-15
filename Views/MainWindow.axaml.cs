@@ -95,6 +95,16 @@ public partial class MainWindow : Window
         }
     }
 
+    protected override void OnOpened(EventArgs e)
+    {
+        // Register the global hotkey as soon as the native window exists. Loaded can be delayed or
+        // skipped when the window is hidden to the tray right after opening (--minimized startup),
+        // which would leave the hotkey unregistered until the window was first shown on screen.
+        SetupHotkeyHook();
+
+        base.OnOpened(e);
+    }
+
     private void OnLoaded(object? sender, RoutedEventArgs e)
     {
         if (ViewModel is { } vm)
@@ -103,7 +113,11 @@ public partial class MainWindow : Window
             vm.PropertyChanged += OnViewModelPropertyChanged;
         }
 
-        SetupHotkeyHook();
+        // Normally already done in OnOpened. Retry here only if that did not succeed, so a
+        // working registration is not torn down and recreated.
+        if (_oldWndProc == 0 || !_isHotkeyRegistered)
+            SetupHotkeyHook();
+
         UpdateMaximizeIcon();
         UpdateOverlayPreviewAppearance();
         UpdateOverlayPreviewPosition();

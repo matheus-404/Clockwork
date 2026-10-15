@@ -10,8 +10,15 @@ namespace Clockwork.Services;
 
 internal static class StartupMessageBox
 {
-    public static async Task ShowAsync(Window owner, string title, string message)
+    /// <summary>
+    /// Shows a themed message box. With a visible owner it is modal over that window; with no owner,
+    /// or an owner that is hidden or minimized (for example while the app lives in the tray), it
+    /// opens centered on screen as a standalone window.
+    /// </summary>
+    public static async Task ShowAsync(Window? owner, string title, string message)
     {
+        var hasVisibleOwner = owner is { IsVisible: true, WindowState: not WindowState.Minimized };
+
         var window = new Window
         {
             Title = title,
@@ -20,7 +27,7 @@ internal static class StartupMessageBox
             MinWidth = 420,
             SizeToContent = SizeToContent.Height,
             CanResize = false,
-            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            WindowStartupLocation = hasVisibleOwner ? WindowStartupLocation.CenterOwner : WindowStartupLocation.CenterScreen,
             Background = new SolidColorBrush(Color.Parse("#0C0E14")),
             WindowDecorations = WindowDecorations.None,
             ExtendClientAreaToDecorationsHint = true,
@@ -163,7 +170,17 @@ internal static class StartupMessageBox
 
         DockPanel.SetDock(titleBar, Dock.Top);
 
-        await window.ShowDialog(owner);
+        if (hasVisibleOwner)
+        {
+            await window.ShowDialog(owner!);
+            return;
+        }
+
+        var closed = new TaskCompletionSource();
+        window.Closed += (_, _) => closed.TrySetResult();
+        window.Show();
+        window.Activate();
+        await closed.Task;
     }
 
     private static IImage? LoadIcon(string uri)

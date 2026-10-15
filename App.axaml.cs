@@ -50,7 +50,7 @@ public partial class App : Application
                 mainWindow.ShowInTaskbar = false;
             }
 
-            mainWindow.Closing += async (sender, e) =>
+            mainWindow.Closing += (sender, e) =>
             {
                 if (e.CloseReason is WindowCloseReason.ApplicationShutdown or WindowCloseReason.OSShutdown)
                     return;
@@ -62,11 +62,24 @@ public partial class App : Application
                 // so no other setting is reset and later saves keep the flag set.
                 vm.FirstTimeCloseNoticeShown = true;
 
-                await StartupMessageBox.ShowAsync(
-                    mainWindow,
-                    "Running in Background",
-                    "Clockwork has minimized to your system tray to monitor games continuously.\n\n" +
-                    "Click or right-click the Clockwork tray icon to open settings or exit the app.");
+                // MainWindow.OnClosing hides the window right after this event returns, so the
+                // notice is posted until then. It opens as a standalone dialog instead of being
+                // owned by a window that is about to disappear.
+                Dispatcher.UIThread.Post(async () =>
+                {
+                    try
+                    {
+                        await StartupMessageBox.ShowAsync(
+                            null,
+                            "Running in Background",
+                            "Clockwork has minimized to your system tray to monitor games continuously.\n\n" +
+                            "Click or right-click the Clockwork tray icon to open settings or exit the app.");
+                    }
+                    catch (Exception ex)
+                    {
+                        TelemetryDiagnostics.Write($"Background notice failed: {ex.Message}");
+                    }
+                });
             };
 
             _startupCts = new CancellationTokenSource();

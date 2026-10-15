@@ -40,6 +40,7 @@ internal static class PresentMonNative
 
     internal enum PM_METRIC
     {
+        SWAP_CHAIN_ADDRESS = 1,
         CPU_FRAME_TIME = 8,
         CPU_BUSY = 9,
         CPU_WAIT = 10,
@@ -434,4 +435,3 @@ internal static class PresentMonNative
         Marshal.SizeOf<PM_INTROSPECTION_DEVICE>() == 12 &&
         Marshal.SizeOf<PM_INTROSPECTION_METRIC>() == 40;
 }
-

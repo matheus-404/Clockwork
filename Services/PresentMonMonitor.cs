@@ -41,11 +41,24 @@ public sealed class PresentMonMonitor : IDisposable
     private static readonly long LowsRefreshTicks = Stopwatch.Frequency;
     private static readonly long FrameStaleTicks = (long)(FrameStatistics.StaleAfterMs * Stopwatch.Frequency / 1000.0);
 
+    // Primary swap chain selection for the frame query. A process can present on several swap
+    // chains (in-process overlays, launchers, extra windows); only the busiest one is the game.
+    private static readonly long ChainWindowTicks = Stopwatch.Frequency;
+    private static readonly long ChainLostTicks = Stopwatch.Frequency / 2;
+    private static readonly long ChainForgetTicks = Stopwatch.Frequency * 5;
+    private const double ChainSwitchRatio = 1.5;
+
     private readonly object _sync = new();
 
     // Frame history. Guarded by _sync.
     private readonly FrameStatistics _frames = new();
     private readonly double[] _frameScratch = new double[FrameBufferCapacity];
+    private readonly ulong[] _frameChains = new ulong[FrameBufferCapacity];
+    private readonly Dictionary<ulong, ChainTally> _chainTally = new();
+    private readonly List<ulong> _chainStale = new();
+    private Binding? _chainBinding;
+    private ulong _primaryChain;
+    private long _chainWindowStart;
     private readonly double[] _lowsScratch = new double[65_536];
     private long _lowsComputedAt;
     private double? _low1;
@@ -791,6 +804,21 @@ public sealed class PresentMonMonitor : IDisposable
             elements[i] = specs[i].Element;
 
         var status = api.RegisterFrameQuery(_session, out var query, elements, (ulong)elements.Length, out var blobSize);
+
+        if (status != PresentMonNative.PM_STATUS.SUCCESS && specs.Exists(s => s.Binding.Key == MetricKey.SwapChain))
+        {
+            // The swap chain address only enables primary-chain filtering. If this PresentMon
+            // version rejects it, register without it instead of losing every frame metric.
+            TelemetryDiagnostics.Write($"PresentMon frame query rejected the swap chain address ({PresentMonNative.StatusText(status)}); continuing without swap chain filtering.");
+
+            specs = specs.FindAll(s => s.Binding.Key != MetricKey.SwapChain);
+            elements = new PresentMonNative.PM_QUERY_ELEMENT[specs.Count];
+            for (var i = 0; i < specs.Count; i++)
+                elements[i] = specs[i].Element;
+
+            status = api.RegisterFrameQuery(_session, out query, elements, (ulong)elements.Length, out blobSize);
+        }
+
         if (status != PresentMonNative.PM_STATUS.SUCCESS)
         {
             SetError($"PresentMon frame query failed: {PresentMonNative.StatusText(status)}");
@@ -803,11 +831,16 @@ public sealed class PresentMonMonitor : IDisposable
         lock (_sync)
         {
             _frameBindings.Clear();
+            _chainBinding = null;
             for (var i = 0; i < specs.Count; i++)
             {
                 var binding = specs[i].Binding;
                 binding.Element = elements[i];
-                _frameBindings.Add(binding);
+
+                if (binding.Key == MetricKey.SwapChain)
+                    _chainBinding = binding;
+                else
+                    _frameBindings.Add(binding);
             }
         }
 
@@ -888,6 +921,10 @@ public sealed class PresentMonMonitor : IDisposable
         if (stats.Contains(StatId.BetweenPresents) || stats.Intersects(StatGroups.FrameHistory))
             AddFrameMetric(specs, PresentMonNative.PM_METRIC.BETWEEN_PRESENTS, MetricKey.BetweenPresents);
 
+        // Last, and only when there is something to filter: the swap chain of each frame.
+        if (specs.Count > 0)
+            AddSwapChainMetric(specs);
+
         return specs;
     }
 
@@ -928,7 +965,13 @@ public sealed class PresentMonMonitor : IDisposable
         _frameQuery = 0;
         _frameBlobSize = 0;
         lock (_sync)
+        {
             _frameBindings.Clear();
+            _chainBinding = null;
+            _primaryChain = 0;
+            _chainWindowStart = 0;
+            _chainTally.Clear();
+        }
 
         FreeBuffer(ref _frameBlob);
     }
@@ -1063,8 +1106,15 @@ public sealed class PresentMonMonitor : IDisposable
                 metricCounts.Clear();
                 var anyDropped = false;
 
+                // Reads each frame's swap chain and decides which chain is the game's. Frames
+                // from any other chain (overlays, launchers, extra windows) are skipped below.
+                var filterChains = UpdatePrimaryChain((int)requested, stride, now);
+
                 for (var i = 0; i < requested; i++)
                 {
+                    if (filterChains && _frameChains[i] != _primaryChain)
+                        continue;
+
                     foreach (var binding in _frameBindings)
                     {
                         var value = TryReadValue(binding, i, stride);
@@ -1138,6 +1188,114 @@ public sealed class PresentMonMonitor : IDisposable
             if (requested < FrameBufferCapacity)
                 break;
         }
+    }
+
+    private sealed class ChainTally
+    {
+        internal int Count;      // frames in the current evaluation window
+        internal int BatchCount; // frames in the batch being processed
+        internal long LastSeen;
+    }
+
+    /// <summary>
+    /// Reads the swap chain of each frame in the batch into <see cref="_frameChains"/> and keeps
+    /// <see cref="_primaryChain"/> pointing at the busiest chain. Returns false when frames cannot be
+    /// filtered (swap chain not available), in which case every frame is used. Callers hold _sync.
+    /// </summary>
+    private bool UpdatePrimaryChain(int frameCount, int stride, long now)
+    {
+        var binding = _chainBinding;
+        if (binding is null || frameCount <= 0 || frameCount > _frameChains.Length)
+            return false;
+
+        var dataOffset = checked((long)binding.Element.dataOffset);
+
+        foreach (var entry in _chainTally.Values)
+            entry.BatchCount = 0;
+
+        for (var i = 0; i < frameCount; i++)
+        {
+            var address = Add(_frameBlob, checked((long)i * stride + dataOffset));
+            var chain = unchecked((ulong)Marshal.ReadInt64(address));
+            _frameChains[i] = chain;
+
+            if (!_chainTally.TryGetValue(chain, out var tally))
+            {
+                tally = new ChainTally();
+                _chainTally[chain] = tally;
+            }
+
+            tally.Count++;
+            tally.BatchCount++;
+            tally.LastSeen = now;
+        }
+
+        // First frames ever, or the current primary went quiet: take the busiest chain of this batch.
+        if (_primaryChain == 0 ||
+            (_chainTally.TryGetValue(_primaryChain, out var current) && now - current.LastSeen > ChainLostTicks))
+        {
+            ulong best = 0;
+            var bestCount = 0;
+            foreach (var (address, entry) in _chainTally)
+            {
+                if (entry.BatchCount > bestCount)
+                {
+                    best = address;
+                    bestCount = entry.BatchCount;
+                }
+            }
+
+            if (best != 0 && best != _primaryChain)
+                SetPrimaryChain(best);
+        }
+
+        // Once per window: switch only when another chain is clearly busier (hysteresis).
+        if (_chainWindowStart == 0)
+        {
+            _chainWindowStart = now;
+        }
+        else if (now - _chainWindowStart >= ChainWindowTicks)
+        {
+            ulong best = 0;
+            var bestCount = 0;
+            foreach (var (address, entry) in _chainTally)
+            {
+                if (entry.Count > bestCount)
+                {
+                    best = address;
+                    bestCount = entry.Count;
+                }
+            }
+
+            var primaryCount = _chainTally.TryGetValue(_primaryChain, out var primary) ? primary.Count : 0;
+            if (best != 0 && best != _primaryChain && bestCount > primaryCount * ChainSwitchRatio)
+                SetPrimaryChain(best);
+
+            _chainStale.Clear();
+            foreach (var (address, entry) in _chainTally)
+            {
+                entry.Count = 0;
+                if (address != _primaryChain && now - entry.LastSeen > ChainForgetTicks)
+                    _chainStale.Add(address);
+            }
+
+            foreach (var address in _chainStale)
+                _chainTally.Remove(address);
+
+            _chainWindowStart = now;
+        }
+
+        return _primaryChain != 0;
+    }
+
+    private void SetPrimaryChain(ulong chain)
+    {
+        var first = _primaryChain == 0;
+        _primaryChain = chain;
+
+        // Only worth a log line when there is actually more than one chain to choose between.
+        if (_chainTally.Count > 1 || !first)
+            TelemetryDiagnostics.Write($"PresentMon: using swap chain 0x{chain:X} for frame statistics ({_chainTally.Count} seen).");
     }
 
     private static bool IsLatencyKey(MetricKey key) =>
@@ -1420,6 +1578,36 @@ public sealed class PresentMonMonitor : IDisposable
         specs.Add(new QuerySpec(element, new Binding(BindingKind.Frame, key, processDeviceId.Value, 0, info.FrameType, info.Unit, element)));
     }
 
+    private void AddSwapChainMetric(List<QuerySpec> specs)
+    {
+        const PresentMonNative.PM_METRIC metric = PresentMonNative.PM_METRIC.SWAP_CHAIN_ADDRESS;
+
+        // Optional: if this PresentMon version does not expose it as a 64-bit frame value,
+        // frames are simply not filtered by swap chain.
+        if (!_metrics.TryGetValue(metric, out var info))
+            return;
+
+        if (info.MetricType != PresentMonNative.PM_METRIC_TYPE.FRAME_EVENT && info.MetricType != PresentMonNative.PM_METRIC_TYPE.DYNAMIC_FRAME)
+            return;
+
+        if (info.FrameType != PresentMonNative.PM_DATA_TYPE.UINT64)
+            return;
+
+        var deviceId = ResolveProcessDeviceId(info);
+        if (!deviceId.HasValue)
+            return;
+
+        var element = new PresentMonNative.PM_QUERY_ELEMENT
+        {
+            metric = metric,
+            stat = PresentMonNative.PM_STAT.NONE,
+            deviceId = deviceId.Value,
+            arrayIndex = 0,
+        };
+
+        specs.Add(new QuerySpec(element, new Binding(BindingKind.Frame, MetricKey.SwapChain, deviceId.Value, 0, info.FrameType, info.Unit, element)));
+    }
+
     private uint? ResolveProcessDeviceId(MetricInfo info)
     {
         if (info.DeviceArraySizes.ContainsKey(0u))
@@ -1574,6 +1762,9 @@ public sealed class PresentMonMonitor : IDisposable
         CpuFrameTime, CpuBusy, CpuWait, GpuTime, GpuBusy, GpuWait, DroppedFrames, GpuLatency,
         DisplayLatency, RenderPresentLatency, UntilDisplayed, BetweenPresents, BetweenDisplayChange,
         InputToPhotonLatency,
+
+        // Per-frame swap chain address. Used only to pick the primary swap chain, never reported.
+        SwapChain,
 
         Count,
     }
