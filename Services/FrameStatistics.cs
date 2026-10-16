@@ -41,7 +41,7 @@ public sealed class FrameStatistics
     private long _averageFrames;
     private double _averageTimeMs;
 
-    public FrameStatistics(int capacity = 65_536)
+    public FrameStatistics(int capacity = 8_192)
     {
         if (capacity <= 0)
             throw new ArgumentOutOfRangeException(nameof(capacity));

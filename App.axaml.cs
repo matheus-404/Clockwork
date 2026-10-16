@@ -1,3 +1,4 @@
+using System.Runtime;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -24,22 +25,38 @@ public partial class App : Application
 
     public override void Initialize() => AvaloniaXamlLoader.Load(this);
 
+    internal void ToggleOverlay() => _overlay?.ToggleVisibility();
+
+    internal static void TrimMemory()
+    {
+        try
+        {
+            GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect(2, GCCollectionMode.Aggressive, blocking: false, compacting: true);
+        }
+        catch
+        {
+        }
+    }
+
     public override void OnFrameworkInitializationCompleted()
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnExplicitShutdown;
+            desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
             _desktop = desktop;
 
-            var startMinimized = (desktop.Args?.Any(a =>
+            var cliMinimized = desktop.Args?.Any(a =>
                 string.Equals(a, "--minimized", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(a, "-minimized", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(a, "/minimized", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(a, "-m", StringComparison.OrdinalIgnoreCase)) ?? false);
+                string.Equals(a, "-m", StringComparison.OrdinalIgnoreCase)) ?? false;
 
             // The view model is the only component that writes settings.json. It loads the
             // saved state (including the first-close notice flag) and saves every value together.
             var vm = new MainWindowViewModel();
+            var startMinimized = cliMinimized || vm.StartMinimized;
+
             var mainWindow = new MainWindow { DataContext = vm };
             _mainWindow = mainWindow;
             desktop.MainWindow = mainWindow;
@@ -50,7 +67,7 @@ public partial class App : Application
                 mainWindow.ShowInTaskbar = false;
             }
 
-            mainWindow.Closing += (sender, e) =>
+            mainWindow.Closing += (_, e) =>
             {
                 if (e.CloseReason is WindowCloseReason.ApplicationShutdown or WindowCloseReason.OSShutdown)
                     return;
@@ -92,6 +109,7 @@ public partial class App : Application
                 {
                     mainWindow.ShowInTaskbar = false;
                     mainWindow.Hide();
+                    TrimMemory();
                 }
 
                 if (Interlocked.CompareExchange(ref _isInitialized, 1, 0) == 0)
@@ -112,7 +130,7 @@ public partial class App : Application
                 vm.FlushPendingSave();
 
                 _overlay?.Dispose();
-                _presentMonUpdater?.Dispose();
+                Interlocked.Exchange(ref _presentMonUpdater, null)?.Dispose();
                 _appUpdater?.Dispose();
 
                 _startupCts?.Dispose();
@@ -146,10 +164,19 @@ public partial class App : Application
             _ = CheckForAppUpdateAsync(cancellationToken);
             _appUpdater?.StartPeriodicChecks(TimeSpan.FromHours(24), cancellationToken);
 
-            if (_presentMonUpdater is null)
+            var updater = Interlocked.Exchange(ref _presentMonUpdater, null);
+            if (updater is null)
                 return;
 
-            var result = await _presentMonUpdater.EnsureLatestAsync(cancellationToken);
+            PresentMonStartupResult result;
+            try
+            {
+                result = await updater.EnsureLatestAsync(cancellationToken);
+            }
+            finally
+            {
+                updater.Dispose();
+            }
 
             if (cancellationToken.IsCancellationRequested)
                 return;
@@ -210,6 +237,9 @@ public partial class App : Application
                     result.Status is PresentMonStartupStatus.Installed or PresentMonStartupStatus.Updated)
                     _overlay?.NotifyPresentMonChanged();
             });
+
+            if (!mainWindow.IsVisible)
+                TrimMemory();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

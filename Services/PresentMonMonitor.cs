@@ -19,10 +19,11 @@ namespace Clockwork.Services;
 /// </remarks>
 public sealed class PresentMonMonitor : IDisposable
 {
-    private const int MaxSwapChains = 64;
+    private const int MaxSwapChains = 16;
     private const uint TelemetryPollingPeriodMs = 100;
     private const uint EtwFlushPeriodMs = 16;
     private const int FrameBufferCapacity = 4096;
+    private const int LowsScratchCapacity = 8_192;
     private const int ConnectionErrorsBeforeReconnect = 20;
     private const double MaxPlausibleFrameMs = 10_000;
 
@@ -58,7 +59,7 @@ public sealed class PresentMonMonitor : IDisposable
     private readonly object _sync = new();
 
     // Frame history. Guarded by _sync.
-    private readonly FrameStatistics _frames = new();
+    private readonly FrameStatistics _frames = new(LowsScratchCapacity);
     private readonly double[] _frameScratch = new double[FrameBufferCapacity];
     private readonly ulong[] _frameChains = new ulong[FrameBufferCapacity];
     private readonly Dictionary<ulong, ChainTally> _chainTally = new();
@@ -66,7 +67,7 @@ public sealed class PresentMonMonitor : IDisposable
     private Binding? _chainBinding;
     private ulong _primaryChain;
     private long _chainWindowStart;
-    private readonly double[] _lowsScratch = new double[65_536];
+    private double[]? _lowsScratch;
     private long _lowsComputedAt;
     private double? _low1;
     private double? _low01;
@@ -210,7 +211,7 @@ public sealed class PresentMonMonitor : IDisposable
         Volatile.Write(ref _nextQueryAttemptTs, 0);
     }
 
-    public void Update()
+    public void Update(bool consumeFrames = true)
     {
         if (TrackedPid == 0)
             return;
@@ -231,7 +232,8 @@ public sealed class PresentMonMonitor : IDisposable
         try
         {
             PollDynamicMetrics();
-            ConsumeFrames();
+            if (consumeFrames)
+                ConsumeFrames();
         }
         catch (Exception ex)
         {
@@ -289,8 +291,7 @@ public sealed class PresentMonMonitor : IDisposable
 
     /// <summary>
     /// True when at least one statistic in <paramref name="wanted"/> currently has a finite value.
-    /// Used to decide that telemetry has started flowing. The 1% and 0.1% lows are ignored because
-    /// they need history and would trigger the sort. Safe to call without the caller's native-call lock.
+    /// Used to decide that telemetry has started flowing. Safe to call without the caller's native-call lock.
     /// </summary>
     public bool HasAnyValue(StatSet wanted)
     {
@@ -302,6 +303,9 @@ public sealed class PresentMonMonitor : IDisposable
 
         lock (_sync)
         {
+            if ((wanted.Contains(StatId.Low1Fps) || wanted.Contains(StatId.Low01Fps)) && !_frames.IsStale(now))
+                return true;
+
             var gpu = wanted.Intersects(StatGroups.Gpu) ? ChooseActiveGpu(now, wanted) : null;
             for (var bits = wanted.Bits; bits != 0; bits &= bits - 1)
             {
@@ -507,16 +511,18 @@ public sealed class PresentMonMonitor : IDisposable
     private (double? Low1, double? Low01) GetLows(long now)
     {
         int count;
+        double[] scratch;
         lock (_sync)
         {
             if (_lowsComputedAt != 0 && now - _lowsComputedAt < LowsRefreshTicks)
                 return (_low1, _low01);
 
-            count = _frames.CopyRecentFrameTimes(now, LowsWindowSeconds, _lowsScratch);
+            scratch = _lowsScratch ??= new double[LowsScratchCapacity];
+            count = _frames.CopyRecentFrameTimes(now, LowsWindowSeconds, scratch);
         }
 
         // The sort runs outside every lock, so it can never hold up frame consumption.
-        var result = count > 0 ? FrameStatistics.ComputeLows(_lowsScratch, count) : (null, null);
+        var result = count > 0 ? FrameStatistics.ComputeLows(scratch, count) : (null, null);
 
         lock (_sync)
         {
@@ -1025,8 +1031,6 @@ public sealed class PresentMonMonitor : IDisposable
         if (api is null || _dynamicQuery == 0 || _dynamicBlob == 0)
             return;
 
-        ZeroMemory(_dynamicBlob, _dynamicBlobCapacity);
-
         uint swapChains = MaxSwapChains;
         var status = api.PollDynamicQuery(_dynamicQuery, (uint)TrackedPid, _dynamicBlob, ref swapChains);
         if (status != PresentMonNative.PM_STATUS.SUCCESS)
@@ -1081,7 +1085,7 @@ public sealed class PresentMonMonitor : IDisposable
                             var value = TryReadValue(binding, primarySwapChain);
                             if (value.HasValue && double.IsFinite(value.Value))
                             {
-                                var converted = ConvertToDisplayUnit(value.Value, binding.Unit);
+                                var converted = value.Value * binding.ScaleFactor;
                                 _values[(int)binding.Key] = new TimedValue(converted, now);
                             }
                             break;
@@ -1093,7 +1097,7 @@ public sealed class PresentMonMonitor : IDisposable
                             var value = TryReadValue(binding, 0);
                             if (value.HasValue && double.IsFinite(value.Value))
                             {
-                                var converted = ConvertToDisplayUnit(value.Value, binding.Unit);
+                                var converted = value.Value * binding.ScaleFactor;
                                 if (!_gpuSamples.TryGetValue(binding.DeviceId, out var sample))
                                 {
                                     sample = new GpuSample(binding.DeviceId);
@@ -1167,7 +1171,7 @@ public sealed class PresentMonMonitor : IDisposable
                         if (!value.HasValue || !double.IsFinite(value.Value))
                             continue;
 
-                        var converted = ConvertToDisplayUnit(value.Value, binding.Unit);
+                        var converted = value.Value * binding.ScaleFactor;
 
                         if (binding.Key == MetricKey.DroppedFrames)
                         {
@@ -1778,23 +1782,23 @@ public sealed class PresentMonMonitor : IDisposable
         };
     }
 
-    private static double ConvertToDisplayUnit(double value, PresentMonNative.PM_UNIT unit) => unit switch
+    private static double GetUnitScaleFactor(PresentMonNative.PM_UNIT unit) => unit switch
     {
-        PresentMonNative.PM_UNIT.MICROSECONDS => value / 1000.0,
-        PresentMonNative.PM_UNIT.SECONDS => value * 1000.0,
-        PresentMonNative.PM_UNIT.MINUTES => value * 60000.0,
-        PresentMonNative.PM_UNIT.HOURS => value * 3600000.0,
-        PresentMonNative.PM_UNIT.RATIO => value * 100.0,
-        PresentMonNative.PM_UNIT.MILLIWATTS => value / 1000.0,
-        PresentMonNative.PM_UNIT.KILOWATTS => value * 1000.0,
-        PresentMonNative.PM_UNIT.MILLIVOLTS => value / 1000.0,
-        PresentMonNative.PM_UNIT.KILOHERTZ => value / 1000.0,
-        PresentMonNative.PM_UNIT.HERTZ => value / 1_000_000.0,
-        PresentMonNative.PM_UNIT.GIGAHERTZ => value * 1000.0,
-        PresentMonNative.PM_UNIT.BYTES => value / 1048576.0,
-        PresentMonNative.PM_UNIT.KILOBYTES => value / 1024.0,
-        PresentMonNative.PM_UNIT.GIGABYTES => value * 1024.0,
-        _ => value,
+        PresentMonNative.PM_UNIT.MICROSECONDS => 1.0 / 1000.0,
+        PresentMonNative.PM_UNIT.SECONDS => 1000.0,
+        PresentMonNative.PM_UNIT.MINUTES => 60000.0,
+        PresentMonNative.PM_UNIT.HOURS => 3600000.0,
+        PresentMonNative.PM_UNIT.RATIO => 100.0,
+        PresentMonNative.PM_UNIT.MILLIWATTS => 1.0 / 1000.0,
+        PresentMonNative.PM_UNIT.KILOWATTS => 1000.0,
+        PresentMonNative.PM_UNIT.MILLIVOLTS => 1.0 / 1000.0,
+        PresentMonNative.PM_UNIT.KILOHERTZ => 1.0 / 1000.0,
+        PresentMonNative.PM_UNIT.HERTZ => 1.0 / 1_000_000.0,
+        PresentMonNative.PM_UNIT.GIGAHERTZ => 1000.0,
+        PresentMonNative.PM_UNIT.BYTES => 1.0 / 1048576.0,
+        PresentMonNative.PM_UNIT.KILOBYTES => 1.0 / 1024.0,
+        PresentMonNative.PM_UNIT.GIGABYTES => 1024.0,
+        _ => 1.0,
     };
 
     // ---- buffers and lifetime ----------------------------------------------------------------
@@ -1806,14 +1810,6 @@ public sealed class PresentMonMonitor : IDisposable
 
         Marshal.FreeHGlobal(buffer);
         buffer = 0;
-    }
-
-    private static void ZeroMemory(IntPtr pointer, uint bytes)
-    {
-        unsafe
-        {
-            new Span<byte>((void*)pointer, checked((int)Math.Min(bytes, int.MaxValue))).Clear();
-        }
     }
 
     public void Dispose()
@@ -1881,6 +1877,7 @@ public sealed class PresentMonMonitor : IDisposable
         internal int ArrayIndex { get; }
         internal PresentMonNative.PM_DATA_TYPE DataType { get; }
         internal PresentMonNative.PM_UNIT Unit { get; }
+        internal double ScaleFactor { get; }
         internal PresentMonNative.PM_QUERY_ELEMENT Element { get; set; }
 
         internal Binding(BindingKind kind, MetricKey key, uint deviceId, int arrayIndex, PresentMonNative.PM_DATA_TYPE dataType, PresentMonNative.PM_UNIT unit, PresentMonNative.PM_QUERY_ELEMENT element)
@@ -1891,6 +1888,7 @@ public sealed class PresentMonMonitor : IDisposable
             ArrayIndex = arrayIndex;
             DataType = dataType;
             Unit = unit;
+            ScaleFactor = GetUnitScaleFactor(unit);
             Element = element;
         }
     }

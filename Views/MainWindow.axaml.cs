@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
@@ -229,13 +228,7 @@ public partial class MainWindow : Window
     private static void TriggerOverlayToggle()
     {
         if (Application.Current is App app)
-        {
-            var field = typeof(App).GetField("_overlay", BindingFlags.Instance | BindingFlags.NonPublic);
-            if (field?.GetValue(app) is OverlayController overlay)
-            {
-                overlay.ToggleVisibility();
-            }
-        }
+            app.ToggleOverlay();
     }
 
     private void OnHotkeyRecorderClick(object? sender, RoutedEventArgs e)
@@ -475,9 +468,10 @@ public partial class MainWindow : Window
 
         if (vm.OverlayBackgroundEnabled)
         {
-            _previewBackgroundBrush ??= new SolidColorBrush(Color.FromArgb(alpha, 0, 0, 0));
-            if (_previewBackgroundBrush is not null && _previewBackgroundBrush.Color.A != alpha)
+            if (_previewBackgroundBrush is null)
                 _previewBackgroundBrush = new SolidColorBrush(Color.FromArgb(alpha, 0, 0, 0));
+            else if (_previewBackgroundBrush.Color.A != alpha)
+                _previewBackgroundBrush.Color = Color.FromArgb(alpha, 0, 0, 0);
 
             PreviewOverlay.Background = _previewBackgroundBrush;
             PreviewOverlayValue.Foreground = _previewWhiteBrush;
@@ -508,14 +502,14 @@ public partial class MainWindow : Window
             return;
 
         var scale = vm.OverlayScale / 100.0;
-        if (PreviewOverlay.RenderTransform is Avalonia.Media.ScaleTransform previewScale)
+        if (PreviewOverlay.RenderTransform is ScaleTransform previewScale)
         {
             previewScale.ScaleX = scale;
             previewScale.ScaleY = scale;
         }
         else
         {
-            PreviewOverlay.RenderTransform = new Avalonia.Media.ScaleTransform(scale, scale);
+            PreviewOverlay.RenderTransform = new ScaleTransform(scale, scale);
         }
 
         var previewWidth = PreviewOverlay.Width * scale;
@@ -554,6 +548,7 @@ public partial class MainWindow : Window
             _dragOffset = new Point(previewWidth / 2.0, previewHeight / 2.0);
 
         _draggingOverlay = true;
+        OverlayPreviewCanvas.PointerCaptureLost -= OnOverlayPreviewPointerCaptureLost;
         OverlayPreviewCanvas.PointerCaptureLost += OnOverlayPreviewPointerCaptureLost;
         e.Pointer.Capture(OverlayPreviewCanvas);
         UpdateOverlayFromPreviewPoint(point, previewWidth, previewHeight);
@@ -618,13 +613,17 @@ public partial class MainWindow : Window
     private void OnResetOverlaySizeClick(object? sender, RoutedEventArgs e)
     {
         if (ViewModel is { } vm)
+        {
             vm.OverlayScale = 100.0;
+        }
     }
 
     private void OnResetOverlayOpacityClick(object? sender, RoutedEventArgs e)
     {
         if (ViewModel is { } vm)
+        {
             vm.OverlayBackgroundOpacity = 94.0;
+        }
     }
 
     private void OnResetStatisticsClick(object? sender, RoutedEventArgs e)
@@ -648,6 +647,7 @@ public partial class MainWindow : Window
         e.Cancel = true;
         ShowInTaskbar = false;
         Hide();
+        App.TrimMemory();
     }
 
     public void RestoreFromTray()

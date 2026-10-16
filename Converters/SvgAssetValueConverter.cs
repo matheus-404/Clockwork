@@ -18,6 +18,9 @@ public sealed class SvgAssetValueConverter : IValueConverter
     public static readonly SvgAssetValueConverter Instance = new();
     private static readonly ConcurrentDictionary<string, IImage> s_cache = new(StringComparer.OrdinalIgnoreCase);
 
+    // Shared separator set for viewBox and points parsing, so no array is allocated per call.
+    private static readonly char[] s_numberSeparators = [' ', ',', '\t', '\r', '\n'];
+
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
         if (value is not string rawUri || string.IsNullOrWhiteSpace(rawUri))
@@ -178,7 +181,14 @@ public sealed class SvgAssetValueConverter : IValueConverter
         if (string.IsNullOrWhiteSpace(value) || string.Equals(value, "none", StringComparison.OrdinalIgnoreCase))
             return null;
 
-        try { return new SolidColorBrush(Color.Parse(value)); }
+        try
+        {
+            var color = Color.Parse(value);
+
+            // Most icons are plain white: share the immutable built-in brush instead of
+            // allocating a new SolidColorBrush for every path.
+            return color == Colors.White ? Brushes.White : new SolidColorBrush(color);
+        }
         catch { return null; }
     }
 
@@ -285,7 +295,7 @@ public sealed class SvgAssetValueConverter : IValueConverter
         if (string.IsNullOrWhiteSpace(value))
             return default;
 
-        var parts = value.Split(new[] { ' ', ',', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        var parts = value.Split(s_numberSeparators, StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length != 4)
             return default;
 
@@ -306,7 +316,7 @@ public sealed class SvgAssetValueConverter : IValueConverter
         if (string.IsNullOrWhiteSpace(value))
             return result;
 
-        var parts = value.Split(new[] { ' ', ',', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        var parts = value.Split(s_numberSeparators, StringSplitOptions.RemoveEmptyEntries);
         for (var i = 0; i + 1 < parts.Length; i += 2)
         {
             if (double.TryParse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture, out var x) &&

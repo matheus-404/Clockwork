@@ -10,8 +10,21 @@ internal static class OverlayStatFormatter
 {
     public const string NotAvailable = "N/A";
 
-    public static string FormatNumber(double value, int decimals, string unit) =>
-        string.Concat(value.ToString(decimals <= 0 ? "0" : "0.0", CultureInfo.InvariantCulture), unit);
+    public static string FormatNumber(double value, int decimals, string unit)
+    {
+        var format = decimals <= 0 ? "0" : "0.0";
+        if (string.IsNullOrEmpty(unit))
+            return value.ToString(format, CultureInfo.InvariantCulture);
+
+        Span<char> buffer = stackalloc char[64];
+        if (value.TryFormat(buffer, out var written, format, CultureInfo.InvariantCulture) &&
+            unit.AsSpan().TryCopyTo(buffer[written..]))
+        {
+            return new string(buffer[..(written + unit.Length)]);
+        }
+
+        return string.Concat(value.ToString(format, CultureInfo.InvariantCulture), unit);
+    }
 
     public static string FormatFlag(double value) => value != 0 ? "Yes" : "No";
 
@@ -33,6 +46,24 @@ internal static class OverlayStatFormatter
 
     public static string FormatRam(double usedGb, double totalGb) =>
         string.Create(CultureInfo.InvariantCulture, $"{usedGb:0.0} / {totalGb:0.0} GB");
+
+    /// <summary>
+    /// Packs used and total RAM (rounded to tenths of a GB) into a single 64-bit key so strings
+    /// are only allocated when the displayed numbers change.
+    /// </summary>
+    public static long PackRamKey(double usedGb, double totalGb)
+    {
+        var usedTenths = (long)Math.Round(Math.Max(0.0, usedGb) * 10.0, MidpointRounding.AwayFromZero);
+        var totalTenths = (long)Math.Round(Math.Max(0.0, totalGb) * 10.0, MidpointRounding.AwayFromZero);
+        return (usedTenths << 32) | (uint)totalTenths;
+    }
+
+    public static string FormatRamKeyed(long packedKey)
+    {
+        var usedTenths = packedKey >> 32;
+        var totalTenths = (uint)packedKey;
+        return FormatRam(usedTenths / 10.0, totalTenths / 10.0);
+    }
 
     public static string FormatPercent(long percent) =>
         string.Create(CultureInfo.InvariantCulture, $"{percent}%");
@@ -59,6 +90,16 @@ internal sealed class StatSlot
     public StatDefinition Definition { get; }
 
     public string Label => Definition.Label;
+
+    /// <summary>Clears cached state when a game session ends or switches processes.</summary>
+    public void Reset()
+    {
+        _hasNumber = false;
+        _lastNumber = 0;
+        _hasKey = false;
+        _lastKey = 0;
+        _lastText = null;
+    }
 
     /// <summary>
     /// Updates a numeric statistic. The value is rounded to the displayed precision first, so a

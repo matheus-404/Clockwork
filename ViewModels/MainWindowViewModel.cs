@@ -22,6 +22,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     private double _overlayBackgroundOpacity = 94.0;
     private bool _includeWindowedGames = false;
     private bool _startWithWindows = false;
+    private bool _startMinimized = false;
     private bool _firstTimeCloseNoticeShown = false;
     private string _toggleHotkey = DefaultToggleHotkey;
     private List<string> _customIgnoredApplications = [];
@@ -59,6 +60,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         _overlayBackgroundOpacity = loaded.OverlayBackgroundOpacity;
         _includeWindowedGames = loaded.IncludeWindowedGames;
         _startWithWindows = loaded.StartWithWindows;
+        _startMinimized = loaded.StartMinimized;
         _firstTimeCloseNoticeShown = loaded.FirstTimeCloseNoticeShown;
         _toggleHotkey = string.IsNullOrWhiteSpace(loaded.ToggleHotkey) ? DefaultToggleHotkey : loaded.ToggleHotkey;
 
@@ -66,7 +68,6 @@ public sealed class MainWindowViewModel : ViewModelBase
         _customIgnoredApplicationsText = string.Join(Environment.NewLine, _customIgnoredApplications);
 
         IgnoredApplications.SetCustom(_customIgnoredApplications);
-        GameDetector.SetCustomBlacklist(_customIgnoredApplications);
 
         if (_startWithWindows)
             SetStartWithWindowsRegistry(true);
@@ -193,6 +194,18 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
 
+    public bool StartMinimized
+    {
+        get => _startMinimized;
+        set
+        {
+            if (!SetField(ref _startMinimized, value))
+                return;
+
+            RequestSettingsSave();
+        }
+    }
+
     public string ToggleHotkey
     {
         get => _toggleHotkey;
@@ -223,7 +236,6 @@ public sealed class MainWindowViewModel : ViewModelBase
 
             _customIgnoredApplications = list;
             IgnoredApplications.SetCustom(list);
-            GameDetector.SetCustomBlacklist(list);
             RequestSettingsSave();
         }
     }
@@ -316,29 +328,46 @@ public sealed class MainWindowViewModel : ViewModelBase
             OverlayBackgroundOpacity,
             IncludeWindowedGames,
             StartWithWindows,
-            startMinimized: false,
+            StartMinimized,
             FirstTimeCloseNoticeShown,
             _customIgnoredApplications,
             ToggleHotkey);
         _savePending = false;
     }
 
+    private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    private const string RunValueName = "Clockwork";
+
     private static void SetStartWithWindowsRegistry(bool enable)
     {
         try
         {
-            using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
+            var processPath = Environment.ProcessPath;
+            if (enable && string.IsNullOrEmpty(processPath))
+                return;
+
+            var desired = enable ? $"\"{processPath}\" --minimized" : null;
+
+            // Read with read-only access first. Most launches find the value already correct (or
+            // already absent), so the key is only opened for writing when something must change.
+            using (var readKey = Registry.CurrentUser.OpenSubKey(RunKeyPath, false))
+            {
+                if (readKey is null)
+                    return;
+
+                var current = readKey.GetValue(RunValueName) as string;
+                if (string.Equals(current, desired, StringComparison.Ordinal))
+                    return;
+            }
+
+            using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, true);
             if (key is null)
                 return;
 
-            var processPath = Environment.ProcessPath;
-            if (string.IsNullOrEmpty(processPath))
-                return;
-
-            if (enable)
-                key.SetValue("Clockwork", $"\"{processPath}\" --minimized");
+            if (desired is null)
+                key.DeleteValue(RunValueName, false);
             else
-                key.DeleteValue("Clockwork", false);
+                key.SetValue(RunValueName, desired);
         }
         catch (Exception ex)
         {

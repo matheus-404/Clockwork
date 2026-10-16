@@ -60,7 +60,7 @@
                         <Grid MinHeight="16">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" SharedSizeGroup="OverlayLabel" />
-                                <ColumnDefinition Width="104" />
+                                <ColumnDefinition Width="120" />
                             </Grid.ColumnDefinitions>
 
                             <TextBlock Grid.Column="0"

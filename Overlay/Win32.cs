@@ -68,6 +68,8 @@ internal static class Win32
     private const uint SWP_NOMOVE = 0x0002;
     private const uint SWP_NOACTIVATE = 0x0010;
 
+    private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
     private static readonly EnumWindowsProc s_enumWindowsProc = EnumWindowsCallback;
 
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
@@ -135,12 +137,49 @@ internal static class Win32
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool UnregisterHotKey(nint hWnd, int id);
 
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern nint OpenProcess(uint dwDesiredAccess, [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle, uint dwProcessId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseHandle(nint hObject);
+
+    [DllImport("kernel32.dll", EntryPoint = "QueryFullProcessImageNameW", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern unsafe bool QueryFullProcessImageName(nint hProcess, uint dwFlags, char* lpExeName, ref uint lpdwSize);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetProcessTimes(nint hProcess, out long lpCreationTime, out long lpExitTime, out long lpKernelTime, out long lpUserTime);
+
+    [DllImport("kernel32.dll", EntryPoint = "K32GetProcessMemoryInfo", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern unsafe bool GetProcessMemoryInfo(nint hProcess, void* ppsmemCounters, uint cb);
+
     [DllImport("ntdll.dll")]
     private static extern int NtQuerySystemInformation(
         int systemInformationClass,
         nint systemInformation,
         int systemInformationLength,
         out int returnLength);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PROCESS_MEMORY_COUNTERS_EX2
+    {
+        public uint cb;
+        public uint PageFaultCount;
+        public nuint PeakWorkingSetSize;
+        public nuint WorkingSetSize;
+        public nuint QuotaPeakPagedPoolUsage;
+        public nuint QuotaPagedPoolUsage;
+        public nuint QuotaPeakNonPagedPoolUsage;
+        public nuint QuotaNonPagedPoolUsage;
+        public nuint PagefileUsage;
+        public nuint PeakPagefileUsage;
+        public nuint PrivateUsage;
+        public ulong PrivateWorkingSetSize;
+        public ulong SharedCommitUsage;
+    }
 
     private delegate bool EnumWindowsProc(nint hWnd, nint lParam);
 
@@ -392,33 +431,89 @@ internal static class Win32
     internal sealed class ProcessSnapshotTable : IDisposable
     {
         private nint _buffer;
-        private int _capacity = 256 * 1024;
+        private int _capacity;
         private bool _disposed;
 
-        private readonly Dictionary<int, ProcessSnapshot> _requested = new();
-
-        public ProcessSnapshotTable()
-        {
-            _buffer = Marshal.AllocHGlobal(_capacity);
-        }
-
-        public bool Refresh(int requestedPid, out ProcessSnapshot snapshot)
+        public bool Refresh(int requestedPid, bool needWorkingSet, out ProcessSnapshot snapshot)
         {
             snapshot = default;
             if (requestedPid <= 0 || _disposed)
                 return false;
 
-            _requested.Clear();
-            _requested[requestedPid] = default;
+            // Fast O(1) path: query the single target process directly without dumping all system processes.
+            if (TryQuerySingleProcess(requestedPid, needWorkingSet, out snapshot))
+                return true;
 
-            if (!QuerySnapshotTable())
-                return false;
-
-            return _requested.TryGetValue(requestedPid, out snapshot) && !string.IsNullOrWhiteSpace(snapshot.Name);
+            // Fallback path for protected processes where OpenProcess is denied.
+            return TryQueryFromSystemTable(requestedPid, out snapshot);
         }
 
-        private bool QuerySnapshotTable()
+        private static unsafe bool TryQuerySingleProcess(int pid, bool needWorkingSet, out ProcessSnapshot snapshot)
         {
+            snapshot = default;
+            var hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, (uint)pid);
+            if (hProcess == 0)
+                return false;
+
+            try
+            {
+                Span<char> pathBuffer = stackalloc char[1024];
+                var size = (uint)pathBuffer.Length;
+                fixed (char* pBuffer = pathBuffer)
+                {
+                    if (!QueryFullProcessImageName(hProcess, 0, pBuffer, ref size) || size == 0)
+                        return false;
+                }
+
+                var fullPath = pathBuffer[..(int)size];
+                var lastSep = fullPath.LastIndexOfAny('\\', '/');
+                var fileNameSpan = lastSep >= 0 ? fullPath[(lastSep + 1)..] : fullPath;
+                if (fileNameSpan.IsEmpty)
+                    return false;
+
+                var name = fileNameSpan.ToString();
+
+                long createTime = 0;
+                if (GetProcessTimes(hProcess, out var creation, out _, out _, out _))
+                    createTime = creation;
+
+                long? privateWorkingSet = null;
+                if (needWorkingSet)
+                {
+                    var counters = new PROCESS_MEMORY_COUNTERS_EX2
+                    {
+                        cb = (uint)sizeof(PROCESS_MEMORY_COUNTERS_EX2)
+                    };
+
+                    if (GetProcessMemoryInfo(hProcess, &counters, counters.cb) &&
+                        counters.PrivateWorkingSetSize <= long.MaxValue)
+                    {
+                        privateWorkingSet = (long)counters.PrivateWorkingSetSize;
+                    }
+                }
+
+                snapshot = new ProcessSnapshot(name, privateWorkingSet, createTime);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                CloseHandle(hProcess);
+            }
+        }
+
+        private bool TryQueryFromSystemTable(int requestedPid, out ProcessSnapshot snapshot)
+        {
+            snapshot = default;
+            if (_buffer == 0)
+            {
+                _capacity = 256 * 1024;
+                _buffer = Marshal.AllocHGlobal(_capacity);
+            }
+
             int returnedLength;
             while (true)
             {
@@ -447,12 +542,12 @@ internal static class Win32
                 return false;
             }
 
-            ParseSnapshotTable(returnedLength);
-            return true;
+            return TryParseSnapshotEntry(requestedPid, returnedLength, out snapshot);
         }
 
-        private void ParseSnapshotTable(int validBytes)
+        private bool TryParseSnapshotEntry(int requestedPid, int validBytes, out ProcessSnapshot snapshot)
         {
+            snapshot = default;
             var baseAddress = _buffer;
             var offset = 0;
             var limit = Math.Min(_capacity, validBytes > 0 ? validBytes : _capacity);
@@ -463,13 +558,16 @@ internal static class Win32
                 var nextOffset = unchecked((uint)Marshal.ReadInt32(entry, 0));
 
                 var pid = unchecked((int)Marshal.ReadInt64(entry, ProcessIdOffset));
-                if (pid > 0 && _requested.ContainsKey(pid))
+                if (pid == requestedPid)
                 {
                     var name = ReadUnicodeString(IntPtr.Add(entry, ProcessNameOffset));
+                    if (string.IsNullOrWhiteSpace(name))
+                        return false;
+
                     var privateWorkingSet = ReadNonNegativeInt64(entry, PrivateWorkingSetOffset);
                     var createTime = Marshal.ReadInt64(entry, CreateTimeOffset);
-                    _requested[pid] = new ProcessSnapshot(name ?? string.Empty, privateWorkingSet, createTime);
-                    break;
+                    snapshot = new ProcessSnapshot(name, privateWorkingSet, createTime);
+                    return true;
                 }
 
                 if (nextOffset == 0 || nextOffset > (uint)(limit - offset))
@@ -477,6 +575,8 @@ internal static class Win32
 
                 offset += (int)nextOffset;
             }
+
+            return false;
         }
 
         private static long? ReadNonNegativeInt64(nint entry, int offset)
@@ -544,33 +644,16 @@ internal sealed class GameDetector : IDisposable
     private static readonly long FreshTicks = Stopwatch.Frequency;
     private static readonly long MaxCacheTicks = Stopwatch.Frequency * 30;
 
-    private static readonly HashSet<string> s_customBlacklist = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly object s_customBlacklistSync = new();
-
     private readonly Win32.ProcessSnapshotTable _snapshots = new();
 
-    private nint _cachedHwnd;
     private int _cachedPid;
     private ProcessSnapshot _cachedProcess;
     private long _cachedAt;
+    private bool _cachedWithWorkingSet;
     private long _trackedRefreshAt;
 
-    public static void SetCustomBlacklist(IEnumerable<string>? customNames)
-    {
-        lock (s_customBlacklistSync)
-        {
-            s_customBlacklist.Clear();
-            if (customNames is null)
-                return;
-
-            foreach (var name in customNames)
-            {
-                var normalized = NormalizeExecutableName(name);
-                if (normalized.Length > 0)
-                    s_customBlacklist.Add(normalized);
-            }
-        }
-    }
+    public static void SetCustomBlacklist(IEnumerable<string>? customNames) =>
+        IgnoredApplications.SetCustom(customNames);
 
     public bool TryGet(bool includeWindowedGames, bool needFreshWorkingSet, out GameInfo game)
     {
@@ -582,7 +665,7 @@ internal sealed class GameDetector : IDisposable
         if (pid <= 0 || pid == Environment.ProcessId)
             return false;
 
-        if (!TryGetForegroundProcess(hwnd, pid, needFreshWorkingSet, out var process))
+        if (!TryGetForegroundProcess(pid, needFreshWorkingSet, out var process))
             return false;
 
         var name = NormalizeExecutableName(process.Name);
@@ -615,7 +698,7 @@ internal sealed class GameDetector : IDisposable
 
         if (needSnapshot)
         {
-            if (!_snapshots.Refresh(tracked.Pid, out var process))
+            if (!_snapshots.Refresh(tracked.Pid, needFreshWorkingSet, out var process))
                 return false;
 
             var name = NormalizeExecutableName(process.Name);
@@ -630,7 +713,7 @@ internal sealed class GameDetector : IDisposable
             current = tracked with
             {
                 Name = name,
-                PrivateWorkingSetBytes = process.PrivateWorkingSetBytes,
+                PrivateWorkingSetBytes = process.PrivateWorkingSetBytes ?? tracked.PrivateWorkingSetBytes,
                 CreateTime = process.CreateTime,
             };
         }
@@ -666,38 +749,30 @@ internal sealed class GameDetector : IDisposable
             : trimmed;
     }
 
-    public static bool IsExecutableBlacklisted(string executableName)
-    {
-        var normalized = NormalizeExecutableName(executableName);
-        if (normalized.Length == 0)
-            return false;
-
-        if (IgnoredApplications.ExecutableNames.Contains(normalized))
-            return true;
-
-        lock (s_customBlacklistSync)
-            return s_customBlacklist.Contains(normalized);
-    }
+    public static bool IsExecutableBlacklisted(string executableName) =>
+        IgnoredApplications.IsIgnored(executableName);
 
     public void Dispose() => _snapshots.Dispose();
 
-    private bool TryGetForegroundProcess(nint hwnd, int pid, bool needFreshWorkingSet, out ProcessSnapshot process)
+    private bool TryGetForegroundProcess(int pid, bool needFreshWorkingSet, out ProcessSnapshot process)
     {
         var now = Stopwatch.GetTimestamp();
         var maxAge = needFreshWorkingSet ? FreshTicks : MaxCacheTicks;
-        if (hwnd == _cachedHwnd && pid == _cachedPid && now - _cachedAt < maxAge)
+        if (pid == _cachedPid &&
+            now - _cachedAt < maxAge &&
+            (!needFreshWorkingSet || _cachedWithWorkingSet))
         {
             process = _cachedProcess;
             return true;
         }
 
-        if (!_snapshots.Refresh(pid, out process))
+        if (!_snapshots.Refresh(pid, needFreshWorkingSet, out process))
             return false;
 
-        _cachedHwnd = hwnd;
         _cachedPid = pid;
         _cachedProcess = process;
         _cachedAt = now;
+        _cachedWithWorkingSet = needFreshWorkingSet;
         return true;
     }
 
